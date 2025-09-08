@@ -1,0 +1,11 @@
+# File: crates/chart-render-skia/Cargo.toml
+
+[package]
+name = "chart-render-skia"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chart-core = { path = "../chart-core" }
+skia-safe = { workspace = true }
+

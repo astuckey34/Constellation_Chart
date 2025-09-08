@@ -1,0 +1,10 @@
+# File: crates/chart-plugins-example/Cargo.toml
+
+[package]
+name = "chart-plugins-example"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chart-core = { path = "../chart-core" }
+

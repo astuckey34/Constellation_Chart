@@ -1,0 +1,12 @@
+# File: crates/chart-python/Cargo.toml
+
+[package]
+name = "chart-python"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "chart_python"
+path = "src/lib.rs"
+

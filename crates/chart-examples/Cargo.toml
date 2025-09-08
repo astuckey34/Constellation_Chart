@@ -1,0 +1,14 @@
+# File: crates/chart-examples/Cargo.toml
+
+[package]
+name = "chart-examples"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "example-lines"
+path = "src/bin/lines.rs"
+
+[dependencies]
+chart-core = { path = "../chart-core" }
+

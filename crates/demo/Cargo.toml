@@ -1,0 +1,12 @@
+# File: crates/demo/Cargo.toml
+# Summary: Demo binary that renders a PNG using the core crate.
+
+[package]
+name = "constellation-demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chart-core = { path = "../chart-core" }
+anyhow = { workspace = true }
+csv = { workspace = true }

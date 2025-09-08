@@ -1,0 +1,27 @@
+# File: Cargo.toml
+# Summary: Workspace definition for Constellation Chart (core + demo).
+
+[workspace]
+members = [
+  "crates/chart-core",
+  "crates/chart-render-skia",
+  "crates/chart-dioxus",
+  "crates/chart-examples",
+  "crates/chart-plugins-example",
+  "crates/chart-python",
+  "crates/demo",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["You <you@example.com>"]
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2.0.16"
+# Use a recent skia-safe. You can pin/adjust if needed.
+skia-safe = { version = "*", features = ["textlayout"] } 
+image = "0.25"   # only used if you want to post-process; not required here
+csv = "1"

@@ -1,0 +1,13 @@
+# File: crates/chart-core/Cargo.toml
+# Summary: Core crate manifest; exposes chart API and Skia-backed rendering.
+
+[package]
+name = "chart-core"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+skia-safe = { workspace = true }

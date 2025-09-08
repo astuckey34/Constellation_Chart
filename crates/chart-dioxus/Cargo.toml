@@ -1,0 +1,10 @@
+# File: crates/chart-dioxus/Cargo.toml
+
+[package]
+name = "chart-dioxus"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chart-core = { path = "../chart-core" }
+
