@@ -167,7 +167,7 @@ Here’s why this matters to me:
 - Parity Layer:
   - [x] Pan & zoom (windowed demo: mouse wheel zoom, drag pan).
   - [~] Crosshair (windowed demo: crosshair lines at cursor; tooltips pending).
-  - [ ] Autoscale axes (ranges derived in demo only; no autoscale yet).
+  - [x] Autoscale axes: full extents (A) and Y-only to visible X-range (Y).
 - [x] Multiple series types: Line, Candlestick, Bar, Histogram, Baseline implemented (see `crates/chart-core/src/series.rs:1`, `crates/chart-core/src/chart.rs:1`).
   - [ ] Light/dark theming (not started).
 

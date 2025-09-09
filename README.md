@@ -31,7 +31,9 @@ cargo run -p constellation-window-demo -- binanceus_CRVUSDT_6h_2023-09-13_to_202
 ```
 
 Controls:
-- Any key: cycle between Candles, Bars, Histogram, Baseline
+- Keys 1–4: switch to Candlesticks, Bars, Histogram, Baseline
+- Key A: autoscale both axes to full data
+- Key Y: autoscale Y to the visible X-range
 - Mouse wheel: zoom at cursor (both axes)
 - Left-drag: pan
 - Crosshair: follows mouse cursor
