@@ -1,0 +1,11 @@
+[package]
+name = "constellation-window-demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chart-core = { path = "../chart-core" }
+anyhow = { workspace = true }
+csv = { workspace = true }
+winit = "0.28"
+softbuffer = "0.3"

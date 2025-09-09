@@ -1,6 +1,3 @@
-Perfect ✅ — let’s stitch it all together into one clean PRD draft that flows from your **technical comparison table** into the **strategic section** we built step by step.
-
-Here’s the full integrated document:
 
 ---
 
@@ -156,13 +153,49 @@ Here’s why this matters to me:
 
 ---
 
-✅ This stitched PRD now flows from **feature comparison → strategic vision → roadmap → adoption → risks**.
-
-👉 Do you want me to also create a **visual roadmap diagram** (MVP → Parity → Differentiation → Stretch) so you have a quick graphic for reference, or keep it text-only?
-
----
-
 # 📁 Workspace Layout
+
+## Progress Update (engineering status)
+
+- MVP:
+  - [x] Skia raster surface PNG rendering (headless) implemented (see `crates/chart-core/src/chart.rs:1`).
+  - [x] Static series rendering for line and candlestick; grid lines drawn (see `crates/chart-core/src/chart.rs:1`).
+  - [x] Basic time/price axes model and drawing (see `crates/chart-core/src/axis.rs:1`).
+- [~] Rendering fidelity validation: demo produces PNGs; golden snapshot tests are placeholders (see `tests/rendering.rs:1`).
+- [x] Rendering fidelity validation: crisp 1px grid/axes (half-pixel alignment), deterministic snapshots (labels off in tests), and golden images for all series types (see `crates/chart-core/tests/snapshot*.rs:1`).
+
+- Parity Layer:
+  - [x] Pan & zoom (windowed demo: mouse wheel zoom, drag pan).
+  - [~] Crosshair (windowed demo: crosshair lines at cursor; tooltips pending).
+  - [ ] Autoscale axes (ranges derived in demo only; no autoscale yet).
+- [x] Multiple series types: Line, Candlestick, Bar, Histogram, Baseline implemented (see `crates/chart-core/src/series.rs:1`, `crates/chart-core/src/chart.rs:1`).
+  - [ ] Light/dark theming (not started).
+
+- Differentiation:
+  - [ ] GPU batching & downsampling (not started).
+  - [ ] High‑fidelity text shaping/metrics (not started).
+  - [ ] Formal plugin system (scaffold crate exists, API not defined).
+  - [~] Export: PNG implemented; SVG pending (see `crates/chart-core/src/chart.rs:1`).
+  - [x] Pure Rust, no JS runtime.
+
+- Stretch:
+  - [ ] Logarithmic scale (not started).
+  - [ ] Theming system (not started).
+  - [ ] Advanced axis formatting (not started).
+  - [ ] WASM/Web fallback demo (not started).
+  - [ ] HiDPI optimizations (not started).
+
+- Adoption & Ecosystem:
+  - [x] Rust workspace and core crate established (see `Cargo.toml:1`).
+  - [~] Demo app: CSV → chart → PNG path implemented; JSON not yet (see `crates/demo/src/main.rs:1`).
+- [x] Golden snapshot tests: harness active with blessed baseline at `crates/chart-core/tests/__snapshots__/basic_chart.png:1` (update via `UPDATE_SNAPSHOTS=1`).
+  - [ ] Python interop (stub crate only; see `crates/chart-python/src/lib.rs:1`).
+  - [ ] API parity/migration helpers (not started).
+  - [ ] Docs/examples/plugins (examples stub only; see `crates/chart-examples/src/bin/lines.rs:1`).
+
+Notes:
+- Generated PNGs found under `target/out/` confirm end‑to‑end render (see `target/out/chart.png:1`).
+- Minor housekeeping: a test placeholder resides at `crates/chart-core/src/rendering.rs:1` and likely belongs under `tests/`.
 
 ```
 constellation-chart/

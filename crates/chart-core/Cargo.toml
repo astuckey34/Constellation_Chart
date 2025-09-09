@@ -11,3 +11,6 @@ build = "build.rs"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 skia-safe = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }

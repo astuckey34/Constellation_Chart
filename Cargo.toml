@@ -10,6 +10,7 @@ members = [
   "crates/chart-plugins-example",
   "crates/chart-python",
   "crates/demo",
+  "crates/window-demo",
 ]
 resolver = "2"
 
