@@ -1,5 +1,9 @@
 // File: crates/chart-core/src/series.rs
 // Summary: Series model for line, candlestick, bar, histogram, and baseline data.
+// Notes:
+// - This file intentionally keeps the original `Series` layout to maintain
+//   compatibility with existing rendering code. New, safer constructors and
+//   helpers are provided to tighten invariants without breaking callers.
 
 #[derive(Clone, Copy, Debug)]
 pub enum SeriesType {
@@ -17,6 +21,19 @@ pub struct Candle {
     pub h: f64,
     pub l: f64,
     pub c: f64,
+}
+
+impl Candle {
+    /// Try to construct a candle enforcing OHLC invariants:
+    /// l <= min(o,c) and h >= max(o,c), and l <= h.
+    pub fn try_new(t: f64, o: f64, h: f64, l: f64, c: f64) -> Result<Self, &'static str> {
+        let lo = o.min(c);
+        let hi = o.max(c);
+        if l > lo { return Err("low above min(open,close)"); }
+        if h < hi { return Err("high below max(open,close)"); }
+        if l > h { return Err("low above high"); }
+        Ok(Self { t, o, h, l, c })
+    }
 }
 
 pub struct Series {
@@ -47,4 +64,7 @@ impl Series {
         self.baseline = Some(baseline);
         self
     }
+
+    /// Get baseline value or default (0.0) when not set.
+    pub fn baseline_value(&self) -> f64 { self.baseline.unwrap_or(0.0) }
 }

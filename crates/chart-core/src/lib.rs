@@ -6,6 +6,8 @@ pub mod series;
 pub mod axis;
 pub mod grid;
 pub mod types;
+pub mod geometry;
+pub mod scale;
 
 pub use chart::{Chart, RenderOptions};
 pub use series::{Series, SeriesType};

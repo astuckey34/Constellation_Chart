@@ -151,10 +151,10 @@ impl Chart {
         canvas.clear(opts.background);
 
         // Plot rect
-        let plot_left = opts.insets.left;
-        let plot_right = opts.width - opts.insets.right;
-        let plot_top = opts.insets.top;
-        let plot_bottom = opts.height - opts.insets.bottom;
+        let plot_left = opts.insets.left as i32;
+        let plot_right = opts.width - opts.insets.right as i32;
+        let plot_top = opts.insets.top as i32;
+        let plot_bottom = opts.height - opts.insets.bottom as i32;
 
         // Grid & axes
         draw_grid(canvas, plot_left, plot_top, plot_right, plot_bottom, opts.crisp_lines);

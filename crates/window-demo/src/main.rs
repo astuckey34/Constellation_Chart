@@ -134,9 +134,9 @@ fn main() {
                         let w = size.width as i32;
                         let h = size.height as i32;
                         let l = insets.left as f64;
-                        let rpx = (w - insets.right) as f64;
+                        let rpx = (w - insets.right as i32) as f64;
                         let t = insets.top as f64;
-                        let bpx = (h - insets.bottom) as f64;
+                        let bpx = (h - insets.bottom as i32) as f64;
                         let plot_w = (rpx - l).max(1.0);
                         let plot_h = (bpx - t).max(1.0);
                         let cx_clamped = cx.clamp(l, rpx);
@@ -218,8 +218,8 @@ fn main() {
                     let insets = RenderOptions::default().insets;
                     let w = size.width as i32;
                     let h = size.height as i32;
-                    let plot_w = ((w - insets.right - insets.left) as f64).max(1.0);
-                    let plot_h = ((h - insets.bottom - insets.top) as f64).max(1.0);
+                    let plot_w = ((w - insets.right as i32 - insets.left as i32) as f64).max(1.0);
+                    let plot_h = ((h - insets.bottom as i32 - insets.top as i32) as f64).max(1.0);
                     let mut v = view.lock().unwrap();
                     let x_span = v.x_max - v.x_min;
                     let y_span = v.y_max - v.y_min;
