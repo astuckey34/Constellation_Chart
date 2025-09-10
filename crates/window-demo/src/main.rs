@@ -1,9 +1,11 @@
 // File: crates/window-demo/src/main.rs
 // Windowed demo: shows chart-core in a window with crosshair, pan, and zoom.
 
-use chart_core::{Axis, Chart, RenderOptions, Series, ViewState, Theme};
+use chart_core::{Axis, Chart, RenderOptions, Series, ViewState, Theme, SmaOverlay, HvLineOverlay, OverlayEvent};
+use chart_core::scale::{TimeScale, ValueScale};
 use chart_core::series::{Candle, SeriesType};
 use std::num::NonZeroU32;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use winit::event::{Event, MouseButton, WindowEvent, ElementState, VirtualKeyCode};
@@ -48,6 +50,8 @@ fn main() {
     // Prepare charts for multiple series types with optional downsampling
     let mut downsample = true; // toggle with 'D'
     let mut charts = build_charts(&candles, downsample, 1024);
+    let mut show_overlay = true; // toggle with 'O'
+    let hv_overlay = std::sync::Arc::new(HvLineOverlay::new());
 
     // Window + softbuffer
     let event_loop = EventLoop::new();
@@ -105,6 +109,11 @@ fn main() {
         {
             let ch = &mut charts[idx];
             v.apply_to_chart(ch);
+            ch.clear_overlays();
+            if show_overlay {
+                ch.add_overlay(SmaOverlay { period: 14 });
+                ch.add_overlay(hv_overlay.clone());
+            }
         }
 
         // Render and blit
@@ -151,6 +160,25 @@ fn main() {
                 WindowEvent::MouseInput { state, button, .. } => {
                     if button == MouseButton::Left {
                         dragging = state == winit::event::ElementState::Pressed;
+                        if dragging {
+                            if let Some((cx, cy)) = *cursor_pos.lock().unwrap() {
+                                // Map pixel -> world (chart coords)
+                                let insets = RenderOptions::default().insets;
+                                let w = size.width as i32; let h = size.height as i32;
+                                let ch = &charts[idx];
+                                let l = insets.left as f32; let rpx = w as f32 - insets.right as f32;
+                                let t = insets.top as f32; let bpx = h as f32 - insets.bottom as f32;
+                                let xspan = (ch.x_axis.max - ch.x_axis.min).max(1e-9);
+                                let ts = TimeScale::new(l, ch.x_axis.min, (rpx - l) / (xspan as f32));
+                                let vs = match ch.y_axis.kind {
+                                    chart_core::axis::ScaleKind::Linear => ValueScale::new_linear(t, bpx, ch.y_axis.min, ch.y_axis.max),
+                                    chart_core::axis::ScaleKind::Log10 => ValueScale::new_log10(t, bpx, ch.y_axis.min, ch.y_axis.max),
+                                };
+                                let xw = ts.from_px(cx as f32);
+                                let yw = vs.from_px(cy as f32);
+                                hv_overlay.handle_event(&OverlayEvent::PointerDown { x: xw, y: yw }, ch);
+                            }
+                        }
                     }
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
@@ -186,6 +214,10 @@ fn main() {
                                 themes.get(ti % themes.len()).map(|t| t.name).unwrap_or("dark"),
                                 if downsample { " | DS:on" } else { " | DS:off" }
                             ));
+                            None
+                        }
+                        Some(VirtualKeyCode::O) => {
+                            show_overlay = !show_overlay;
                             None
                         }
                         Some(VirtualKeyCode::L) => {
@@ -228,6 +260,39 @@ fn main() {
                                 themes.get(*ti % themes.len()).map(|t| t.name).unwrap_or("dark"),
                                 if downsample { " | DS:on" } else { " | DS:off" }
                             ));
+                            None
+                        }
+                        Some(VirtualKeyCode::E) => {
+                            // Export current view as PNG + SVG under target/out/
+                            let mut opts = RenderOptions::default();
+                            opts.width = size.width as i32;
+                            opts.height = size.height as i32;
+                            opts.dpr = *dpr.lock().unwrap();
+                            opts.draw_labels = true;
+                            opts.show_tooltip = false;
+                            // Theme selection
+                            let ti = *theme_idx.lock().unwrap();
+                            opts.theme = themes.get(ti % themes.len()).copied().unwrap_or(Theme::dark());
+
+                            // Apply view and overlays
+                            {
+                                let v = *view.lock().unwrap();
+                                let ch = &mut charts[idx];
+                                v.apply_to_chart(ch);
+                                ch.clear_overlays();
+                                if show_overlay { ch.add_overlay(SmaOverlay { period: 14 }); }
+                            }
+
+                            // Build output paths
+                            let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                            let title = series_title(idx).to_lowercase();
+                            let base = format!("target/out/window_{title}_{ts}");
+                            let png = std::path::PathBuf::from(format!("{base}.png"));
+                            let svg = std::path::PathBuf::from(format!("{base}.svg"));
+                            if let Some(parent) = png.parent() { let _ = std::fs::create_dir_all(parent); }
+                            if let Err(e) = charts[idx].render_to_png(&opts, &png) { eprintln!("export png error: {e}"); }
+                            if let Err(e) = charts[idx].render_to_svg(&opts, &svg) { eprintln!("export svg error: {e}"); }
+                            eprintln!("Exported {} and {}", png.display(), svg.display());
                             None
                         }
                         Some(VirtualKeyCode::Escape) => {

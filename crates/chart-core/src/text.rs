@@ -53,4 +53,3 @@ impl TextShaper {
         p.paint(canvas, (x, y - size * 0.8));
     }
 }
-

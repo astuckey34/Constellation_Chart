@@ -15,3 +15,16 @@ chrono = "0.4"
 
 [dev-dependencies]
 image = { workspace = true }
+criterion = "0.5"
+
+[[bench]]
+name = "lttb_bench"
+harness = false
+
+[[bench]]
+name = "ohlc_bench"
+harness = false
+
+[[bench]]
+name = "render_bench"
+harness = false

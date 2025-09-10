@@ -6,34 +6,38 @@ Prereqs: Rust toolchain installed (1.70+ recommended). Skia is vendored via `ski
 
 ## Run the OHLC Demo
 
-- Using the included CSV:
+- Using the included CSV (repo root contains `CRVUSDT_6h.csv`, `BTCUSDT_1m_100.csv`, `ETHUSDT_1m_500.csv`):
 
 ```
-cargo run -p constellation-demo -- binanceus_CRVUSDT_6h_2023-09-13_to_2025-01-21.csv
+cargo run -p constellation-demo -- CRVUSDT_6h.csv
 ```
 
 Outputs (written under `target/out/`):
 
-- `chart_binanceus_CRVUSDT_6h_candles.png` — candlestick series
-- `chart_binanceus_CRVUSDT_6h_bars.png` — OHLC bar series
-- `chart_binanceus_CRVUSDT_6h_hist.png` — histogram of (close − open) around 0.0
-- `chart_binanceus_CRVUSDT_6h_baseline.png` — baseline area of close vs average close
+- `chart_CRVUSDT_6h_candles.png` — candlestick series
+- `chart_CRVUSDT_6h_bars.png` — OHLC bar series
+- `chart_CRVUSDT_6h_hist.png` — histogram of (close - open) around 0.0
+- `chart_CRVUSDT_6h_baseline.png` — baseline area of close vs average close
 
- Notes:
- - The demo accepts either `.csv` or `.cvs` and will auto-swap the extension if the file isn’t found.
- - Logs print detected headers, row count, and price range.
- - Series types implemented: Line, Candlestick, Bar, Histogram, Baseline.
+Additionally, matching `.svg` vector files are generated for each image.
+
+Notes:
+- The demo accepts either `.csv` or `.cvs` and will auto-swap the extension if the file isn't found.
+- Logs print detected headers, row count, and price range.
+- Series types implemented: Line, Candlestick, Bar, Histogram, Baseline.
 
 ## Windowed Demo (interactive)
 
 ```
-cargo run -p constellation-window-demo -- binanceus_CRVUSDT_6h_2023-09-13_to_2025-01-21.csv
+cargo run -p constellation-window-demo -- CRVUSDT_6h.csv
 ```
 
 Controls:
-- Keys 1–4: switch to Candlesticks, Bars, Histogram, Baseline
+- Keys 1-4: switch to Candlesticks, Bars, Histogram, Baseline
 - Key A: autoscale both axes to full data
 - Key Y: autoscale Y to the visible X-range
+- Key O: toggle SMA overlay on/off
+- Key E: export current view to PNG + SVG (target/out)
 - Mouse wheel: zoom at cursor (both axes)
 - Left-drag: pan
 - Crosshair: follows mouse cursor

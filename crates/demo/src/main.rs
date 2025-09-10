@@ -45,6 +45,8 @@ fn main() -> Result<()> {
     chart_c.add_series(series_c);
     let out_c = out_name_with(&path, "candles");
     chart_c.render_to_png(&opts, &out_c)?;
+    let out_c_svg = out_c.with_extension("svg");
+    chart_c.render_to_svg(&opts, &out_c_svg)?;
     println!("Wrote {}", out_c.display());
 
     // 2) OHLC Bars
@@ -54,6 +56,8 @@ fn main() -> Result<()> {
     chart_bars.add_series(Series::from_candles_as(SeriesType::Bar, candles.clone()).aggregate_ohlc(bucket));
     let out_bars = out_name_with(&path, "bars");
     chart_bars.render_to_png(&opts, &out_bars)?;
+    let out_bars_svg = out_bars.with_extension("svg");
+    chart_bars.render_to_svg(&opts, &out_bars_svg)?;
     println!("Wrote {}", out_bars.display());
 
     // Prepare derived series for Histogram and Baseline
@@ -78,6 +82,8 @@ fn main() -> Result<()> {
     chart_hist.add_series(Series::with_data(SeriesType::Histogram, xy_diff).with_baseline(0.0));
     let out_hist = out_name_with(&path, "hist");
     chart_hist.render_to_png(&opts, &out_hist)?;
+    let out_hist_svg = out_hist.with_extension("svg");
+    chart_hist.render_to_svg(&opts, &out_hist_svg)?;
     println!("Wrote {}", out_hist.display());
 
     // 4) Baseline area of closes around average close
@@ -89,6 +95,8 @@ fn main() -> Result<()> {
     chart_base.add_series(Series::with_data(SeriesType::Baseline, xy_close).with_baseline(avg_close));
     let out_base = out_name_with(&path, "baseline");
     chart_base.render_to_png(&opts, &out_base)?;
+    let out_base_svg = out_base.with_extension("svg");
+    chart_base.render_to_svg(&opts, &out_base_svg)?;
     println!("Wrote {}", out_base.display());
 
     Ok(())

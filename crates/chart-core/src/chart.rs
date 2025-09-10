@@ -12,6 +12,7 @@ use crate::theme::Theme;
 use crate::axis::ScaleKind;
 use crate::scale::{TimeScale, ValueScale};
 use crate::text::TextShaper;
+use crate::plugin::Overlay as OverlayTrait;
 // For time-aware axis formatting
 
 
@@ -50,6 +51,7 @@ pub struct Chart {
     pub series: Vec<Series>,
     pub x_axis: Axis,
     pub y_axis: Axis,
+    pub overlays: Vec<Box<dyn OverlayTrait>>, // optional computed overlays
 }
 
 impl Chart {
@@ -58,11 +60,25 @@ impl Chart {
             series: Vec::new(),
             x_axis: Axis::default_x(),
             y_axis: Axis::default_y(),
+            overlays: Vec::new(),
         }
     }
 
     pub fn add_series(&mut self, series: Series) {
         self.series.push(series);
+    }
+
+    /// Add an overlay provider (computed series drawn above base series).
+    pub fn add_overlay<O: OverlayTrait + 'static>(&mut self, overlay: O) {
+        self.overlays.push(Box::new(overlay));
+    }
+
+    /// Remove all overlays.
+    pub fn clear_overlays(&mut self) { self.overlays.clear(); }
+
+    /// Dispatch an overlay event to all overlays (world coordinates).
+    pub fn handle_overlay_event(&self, evt: &crate::plugin::OverlayEvent) {
+        for ov in &self.overlays { ov.handle_event(evt, self); }
     }
 
     /// Auto-scale x/y axes to fit all attached series. Optional margin fraction expands the y range.
@@ -213,6 +229,22 @@ impl Chart {
             }
         }
 
+        // Overlays (computed)
+        if !self.overlays.is_empty() {
+            let mut overlay_theme = opts.theme;
+            overlay_theme.line_stroke = opts.theme.crosshair;
+            for ov in &self.overlays {
+                let computed = ov.compute(self);
+                for s in &computed {
+                    if matches!(s.series_type, SeriesType::Line) {
+                        draw_line_series(
+                            canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s, &overlay_theme,
+                        );
+                    }
+                }
+            }
+        }
+
         // Crosshair overlay (if provided)
         if let Some((cx, cy)) = opts.crosshair {
             let ix = cx.clamp(plot_left as f32, (plot_right - 1) as f32);
@@ -238,6 +270,352 @@ impl Chart {
                 );
             }
         }
+    }
+
+    /// Export the chart as an SVG file. Current implementation embeds a PNG as a data URI
+    /// to ensure deterministic output without vectorization differences. This serves as a
+    /// practical first step; a pure-vector SVG path can be added later.
+    pub fn render_to_svg(
+        &self,
+        opts: &RenderOptions,
+        output_svg_path: impl AsRef<std::path::Path>,
+    ) -> Result<()> {
+        fn color_to_rgba(c: skia::Color) -> (u8, u8, u8, u8) {
+            (c.r(), c.g(), c.b(), c.a())
+        }
+        fn color_hex_rgb(c: skia::Color) -> String {
+            let (r, g, b, _a) = color_to_rgba(c);
+            format!("#{:02X}{:02X}{:02X}", r, g, b)
+        }
+        fn color_opacity(c: skia::Color) -> String {
+            let (_r, _g, _b, a) = color_to_rgba(c);
+            format!("{:.3}", (a as f32) / 255.0)
+        }
+
+        let w = opts.width.max(1) as i32;
+        let h = opts.height.max(1) as i32;
+        let l = opts.insets.left as i32;
+        let rpx = w - opts.insets.right as i32;
+        let t = opts.insets.top as i32;
+        let bpx = h - opts.insets.bottom as i32;
+        let crisp = opts.crisp_lines;
+        let align = |v: f32| if crisp { v.floor() + 0.5 } else { v };
+
+        let mut out = String::new();
+        out.push_str(&format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\n",
+            w = w,
+            h = h
+        ));
+        // Background
+        out.push_str(&format!(
+            "  <rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" fill=\"{}\" fill-opacity=\"{}\" />\n",
+            color_hex_rgb(opts.theme.background),
+            color_opacity(opts.theme.background),
+            w = w,
+            h = h
+        ));
+
+        // Grid
+        out.push_str("  <g id=\"grid\" stroke-linecap=\"butt\" stroke-width=\"1\" fill=\"none\">\n");
+        let grid_col = color_hex_rgb(opts.theme.grid);
+        let grid_op = color_opacity(opts.theme.grid);
+        for x in linspace(l as f64, rpx as f64, 10) {
+            let xf = align(x as f32);
+            out.push_str(&format!(
+                "    <line x1=\"{x}\" y1=\"{y1}\" x2=\"{x}\" y2=\"{y2}\" stroke=\"{col}\" stroke-opacity=\"{op}\" />\n",
+                x = xf,
+                y1 = t,
+                y2 = bpx,
+                col = grid_col,
+                op = grid_op
+            ));
+        }
+        for y in linspace(t as f64, bpx as f64, 6) {
+            let yf = align(y as f32);
+            out.push_str(&format!(
+                "    <line x1=\"{x1}\" y1=\"{y}\" x2=\"{x2}\" y2=\"{y}\" stroke=\"{col}\" stroke-opacity=\"{op}\" />\n",
+                x1 = l,
+                x2 = rpx,
+                y = yf,
+                col = grid_col,
+                op = grid_op
+            ));
+        }
+        out.push_str("  </g>\n");
+
+        // Axes
+        let axis_col = color_hex_rgb(opts.theme.axis_line);
+        let axis_op = color_opacity(opts.theme.axis_line);
+        let bx = align(bpx as f32);
+        let lx = align(l as f32);
+        out.push_str(&format!(
+            "  <g id=\"axes\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"1.5\" fill=\"none\">\n    <line x1=\"{l}\" y1=\"{bx}\" x2=\"{r}\" y2=\"{bx}\" />\n    <line x1=\"{lx}\" y1=\"{t}\" x2=\"{lx}\" y2=\"{b}\" />\n  </g>\n",
+            col = axis_col,
+            op = axis_op,
+            l = l,
+            r = rpx,
+            t = t,
+            b = bpx,
+            bx = bx,
+            lx = lx
+        ));
+
+        // Ticks & labels
+        if opts.draw_labels {
+            let text_fill = color_hex_rgb(opts.theme.axis_label);
+            let text_op = color_opacity(opts.theme.axis_label);
+            let text_size = 12.0 * opts.dpr.max(0.5);
+
+            // Titles
+            out.push_str(&format!(
+                "  <text x=\"{}\" y=\"{}\" fill=\"{col}\" fill-opacity=\"{op}\" font-size=\"{fs}\">{}</text>\n",
+                rpx as f32 - 80.0 * opts.dpr,
+                bpx as f32 + 28.0 * opts.dpr,
+                self.x_axis.label,
+                col = text_fill,
+                op = text_op,
+                fs = text_size
+            ));
+            out.push_str(&format!(
+                "  <text x=\"{}\" y=\"{}\" fill=\"{col}\" fill-opacity=\"{op}\" font-size=\"{fs}\">{}</text>\n",
+                l as f32 + 8.0 * opts.dpr,
+                t as f32 + 14.0 * opts.dpr,
+                self.y_axis.label,
+                col = text_fill,
+                op = text_op,
+                fs = text_size
+            ));
+
+            let target_xticks = 8usize;
+            let target_yticks = 6usize;
+            let xticks = nice_ticks(self.x_axis.min, self.x_axis.max, target_xticks.max(2));
+            let yticks = if self.y_axis.kind == ScaleKind::Log10 {
+                log_ticks(self.y_axis.min.max(1e-12), self.y_axis.max, target_yticks.max(2))
+            } else {
+                nice_ticks(self.y_axis.min, self.y_axis.max, target_yticks.max(2))
+            };
+            let xspan = (self.x_axis.max - self.x_axis.min).max(1e-9);
+            let ts = TimeScale::new(l as f32, self.x_axis.min, ((rpx - l) as f32) / (xspan as f32));
+            let vs = match self.y_axis.kind {
+                ScaleKind::Linear => ValueScale::new_linear(t as f32, bpx as f32, self.y_axis.min, self.y_axis.max),
+                ScaleKind::Log10 => ValueScale::new_log10(t as f32, bpx as f32, self.y_axis.min, self.y_axis.max),
+            };
+            let sx = |vx: f64| -> f32 { ts.to_px(vx) };
+            let sy = |vy: f64| -> f32 { vs.to_px(vy) };
+
+            let tick_col = color_hex_rgb(opts.theme.tick);
+            let tick_op = color_opacity(opts.theme.tick);
+            out.push_str("  <g id=\"ticks\" fill=\"none\">\n");
+            // X major ticks and labels
+            for vx in xticks {
+                if !vx.is_finite() { continue; }
+                let xpx = align(sx(vx));
+                out.push_str(&format!(
+                    "    <line x1=\"{x}\" y1=\"{by}\" x2=\"{x}\" y2=\"{y2}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"1\" />\n",
+                    x = xpx,
+                    by = bx,
+                    y2 = bx - 6.0 * opts.dpr,
+                    col = tick_col,
+                    op = tick_op
+                ));
+                let label = if detect_time_like(self.x_axis.min, self.x_axis.max).is_some() {
+                    format_time_tick(vx, self.x_axis.min, self.x_axis.max)
+                } else {
+                    format_tick(vx, self.x_axis.min, self.x_axis.max)
+                };
+                out.push_str(&format!(
+                    "    <text x=\"{x}\" y=\"{y}\" fill=\"{col}\" fill-opacity=\"{op}\" font-size=\"{fs}\" text-anchor=\"middle\">{label}</text>\n",
+                    x = xpx,
+                    y = bpx as f32 + 18.0 * opts.dpr,
+                    col = text_fill,
+                    op = text_op,
+                    fs = text_size,
+                    label = label
+                ));
+            }
+            // Y major ticks and labels
+            for vy in yticks {
+                if !vy.is_finite() { continue; }
+                let ypx = align(sy(vy));
+                out.push_str(&format!(
+                    "    <line x1=\"{x1}\" y1=\"{y}\" x2=\"{x2}\" y2=\"{y}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"1\" />\n",
+                    x1 = lx,
+                    x2 = lx + 6.0 * opts.dpr,
+                    y = ypx,
+                    col = tick_col,
+                    op = tick_op
+                ));
+                let label = if self.y_axis.kind == ScaleKind::Log10 { format_log_tick(vy) } else { format_tick(vy, self.y_axis.min, self.y_axis.max) };
+                out.push_str(&format!(
+                    "    <text x=\"{x}\" y=\"{y}\" fill=\"{col}\" fill-opacity=\"{op}\" font-size=\"{fs}\" text-anchor=\"end\">{label}</text>\n",
+                    x = l as f32 - 8.0 * opts.dpr,
+                    y = ypx + 4.0 * opts.dpr,
+                    col = text_fill,
+                    op = text_op,
+                    fs = text_size,
+                    label = label
+                ));
+            }
+            out.push_str("  </g>\n");
+        }
+
+        // Series
+        let xspan = (self.x_axis.max - self.x_axis.min).max(1e-9);
+        let ts = TimeScale::new(l as f32, self.x_axis.min, ((rpx - l) as f32) / (xspan as f32));
+        let vs = match self.y_axis.kind {
+            ScaleKind::Linear => ValueScale::new_linear(t as f32, bpx as f32, self.y_axis.min, self.y_axis.max),
+            ScaleKind::Log10 => ValueScale::new_log10(t as f32, bpx as f32, self.y_axis.min, self.y_axis.max),
+        };
+        let sx = |vx: f64| -> f32 { ts.to_px(vx) };
+        let sy = |vy: f64| -> f32 { vs.to_px(vy) };
+
+        out.push_str("  <g id=\"series\" fill=\"none\" stroke-linejoin=\"round\" stroke-linecap=\"round\">\n");
+        for s in &self.series {
+            match s.series_type {
+                SeriesType::Line => {
+                    if s.data_xy.len() >= 2 {
+                        let stroke = color_hex_rgb(opts.theme.line_stroke);
+                        let sop = color_opacity(opts.theme.line_stroke);
+                        let mut d = String::new();
+                        let (x0, y0) = (sx(s.data_xy[0].0), sy(s.data_xy[0].1));
+                        d.push_str(&format!("M {} {}", x0, y0));
+                        for &(xv, yv) in s.data_xy.iter().skip(1) {
+                            d.push_str(&format!(" L {} {}", sx(xv), sy(yv)));
+                        }
+                        out.push_str(&format!("    <path d=\"{d}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"2\" />\n", d = d, col = stroke, op = sop));
+                    }
+                }
+                SeriesType::Histogram => {
+                    if !s.data_xy.is_empty() {
+                        let base = s.baseline.unwrap_or(0.0);
+                        let y0 = sy(base);
+                        let fill = color_hex_rgb(opts.theme.histogram);
+                        let fop = color_opacity(opts.theme.histogram);
+                        let mut wpx = ((rpx - l) as f32) / (s.data_xy.len().max(1) as f32) * 0.8;
+                        if wpx < 1.0 { wpx = 1.0; }
+                        for &(xv, yv) in &s.data_xy {
+                            let cx = sx(xv);
+                            let yy = sy(yv);
+                            let (ymin, ymax) = if yy < y0 { (yy, y0) } else { (y0, yy) };
+                            out.push_str(&format!(
+                                "    <rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"{col}\" fill-opacity=\"{op}\" />\n",
+                                x = cx - wpx * 0.5,
+                                y = ymin,
+                                w = wpx,
+                                h = (ymax - ymin).abs().max(1.0),
+                                col = fill,
+                                op = fop
+                            ));
+                        }
+                    }
+                }
+                SeriesType::Baseline => {
+                    if s.data_xy.len() >= 2 {
+                        let base = s.baseline.unwrap_or(0.0);
+                        let y0 = sy(base);
+                        let stroke = color_hex_rgb(opts.theme.baseline_stroke);
+                        let sop = color_opacity(opts.theme.baseline_stroke);
+                        let fill = color_hex_rgb(opts.theme.baseline_fill);
+                        let fop = color_opacity(opts.theme.baseline_fill);
+                        let mut d = String::new();
+                        d.push_str(&format!("M {} {}", sx(s.data_xy[0].0), y0));
+                        for &(xv, yv) in &s.data_xy { d.push_str(&format!(" L {} {}", sx(xv), sy(yv))); }
+                        d.push_str(&format!(" L {} {} Z", sx(s.data_xy.last().unwrap().0), y0));
+                        out.push_str(&format!("    <path d=\"{d}\" fill=\"{col}\" fill-opacity=\"{op}\" />\n", d = d, col = fill, op = fop));
+                        let mut d2 = String::new();
+                        d2.push_str(&format!("M {} {}", sx(s.data_xy[0].0), sy(s.data_xy[0].1)));
+                        for &(xv, yv) in s.data_xy.iter().skip(1) { d2.push_str(&format!(" L {} {}", sx(xv), sy(yv))); }
+                        out.push_str(&format!("    <path d=\"{d}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"2\" fill=\"none\" />\n", d = d2, col = stroke, op = sop));
+                    }
+                }
+                SeriesType::Candlestick | SeriesType::Bar => {
+                    if !s.data_ohlc.is_empty() {
+                        let n = s.data_ohlc.len();
+                        let mut wpx = ((rpx - l) as f32) / (n.max(1) as f32) * 0.6;
+                        if wpx < 1.0 { wpx = 1.0; }
+                        for c in &s.data_ohlc {
+                            let x = sx(c.t);
+                            let y_o = sy(c.o);
+                            let y_c = sy(c.c);
+                            let y_h = sy(c.h);
+                            let y_l = sy(c.l);
+                            let up = c.c >= c.o;
+                            let col = if up { opts.theme.candle_up } else { opts.theme.candle_down };
+                            let stroke = color_hex_rgb(col);
+                            let sop = color_opacity(col);
+                            out.push_str(&format!(
+                                "    <line x1=\"{x}\" y1=\"{y1}\" x2=\"{x}\" y2=\"{y2}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"1\" />\n",
+                                x = x,
+                                y1 = y_l,
+                                y2 = y_h,
+                                col = stroke,
+                                op = sop
+                            ));
+                            if matches!(s.series_type, SeriesType::Candlestick) {
+                                let y_top = y_o.min(y_c);
+                                let y_bot = y_o.max(y_c);
+                                out.push_str(&format!(
+                                    "    <rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"{col}\" fill-opacity=\"{op}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"1\" transform=\"translate({tx},0)\" />\n",
+                                    x = -wpx * 0.5,
+                                    y = y_top,
+                                    w = wpx,
+                                    h = (y_bot - y_top).abs().max(1.0),
+                                    col = stroke,
+                                    op = sop,
+                                    tx = x
+                                ));
+                            } else {
+                                let half = wpx * 0.5;
+                                out.push_str(&format!(
+                                    "    <line x1=\"{x1}\" y1=\"{y}\" x2=\"{x2}\" y2=\"{y}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"1\" />\n",
+                                    x1 = x - half,
+                                    x2 = x,
+                                    y = y_o,
+                                    col = stroke,
+                                    op = sop
+                                ));
+                                out.push_str(&format!(
+                                    "    <line x1=\"{x1}\" y1=\"{y}\" x2=\"{x2}\" y2=\"{y}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"1\" />\n",
+                                    x1 = x,
+                                    x2 = x + half,
+                                    y = y_c,
+                                    col = stroke,
+                                    op = sop
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out.push_str("  </g>\n");
+        // Overlays (computed)
+        if !self.overlays.is_empty() {
+            out.push_str("  <g id=\"overlays\" fill=\"none\" stroke-linejoin=\"round\" stroke-linecap=\"round\">\n");
+            let (sr, sg, sb, sa) = (opts.theme.crosshair.r(), opts.theme.crosshair.g(), opts.theme.crosshair.b(), opts.theme.crosshair.a());
+            let stroke = format!("#{:02X}{:02X}{:02X}", sr, sg, sb);
+            let sop = format!("{:.3}", (sa as f32) / 255.0);
+            for ov in &self.overlays {
+                let computed = ov.compute(self);
+                for s in &computed {
+                    if matches!(s.series_type, SeriesType::Line) && s.data_xy.len() >= 2 {
+                        let mut dpath = String::new();
+                        dpath.push_str(&format!("M {} {}", sx(s.data_xy[0].0), sy(s.data_xy[0].1)));
+                        for &(xv, yv) in s.data_xy.iter().skip(1) { dpath.push_str(&format!(" L {} {}", sx(xv), sy(yv))); }
+                        out.push_str(&format!("    <path d=\"{d}\" stroke=\"{col}\" stroke-opacity=\"{op}\" stroke-width=\"1.5\" />\n", d = dpath, col = stroke, op = sop));
+                    }
+                }
+            }
+            out.push_str("  </g>\n");
+        }
+
+        out.push_str("</svg>\n");
+
+        let path = output_svg_path.as_ref();
+        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+        std::fs::write(path, out)?;
+        Ok(())
     }
 }
 
