@@ -158,6 +158,8 @@ Here’s why this matters to me:
 
 ## Progress Update (engineering status)
 
+Last updated: 2025-09-10
+
 - MVP:
   - [x] Skia raster surface PNG rendering (headless) implemented (see `crates/chart-core/src/chart.rs:1`).
   - [x] Static series rendering for line and candlestick; grid lines drawn (see `crates/chart-core/src/chart.rs:1`).
@@ -169,7 +171,10 @@ Here’s why this matters to me:
   - [~] Crosshair (windowed demo: crosshair lines at cursor; tooltips pending).
   - [x] Autoscale axes: full extents (A) and Y-only to visible X-range (Y).
 - [x] Multiple series types: Line, Candlestick, Bar, Histogram, Baseline implemented (see `crates/chart-core/src/series.rs:1`, `crates/chart-core/src/chart.rs:1`).
-  - [ ] Light/dark theming (not started).
+  - [x] Light/dark theming (default: dark; light available; toggle with 'T' in window demo).
+
+  - [x] View state and Y-autoscale-on-visible-range via `ViewState` (see `crates/chart-core/src/view.rs:1`).
+  - [x] Time tick formatting heuristics for epoch seconds/millis using `chrono` (see `crates/chart-core/src/chart.rs:1`).
 
 - Differentiation:
   - [ ] GPU batching & downsampling (not started).
@@ -186,6 +191,7 @@ Here’s why this matters to me:
   - [ ] HiDPI optimizations (not started).
 
 - Adoption & Ecosystem:
+  - [x] Windowed demo (winit + softbuffer) with pan/zoom/crosshair (see `crates/window-demo/src/main.rs:1`).
   - [x] Rust workspace and core crate established (see `Cargo.toml:1`).
   - [~] Demo app: CSV → chart → PNG path implemented; JSON not yet (see `crates/demo/src/main.rs:1`).
 - [x] Golden snapshot tests: harness active with blessed baseline at `crates/chart-core/tests/__snapshots__/basic_chart.png:1` (update via `UPDATE_SNAPSHOTS=1`).

@@ -8,6 +8,7 @@ use crate::grid::linspace;
 use crate::series::{Series, SeriesType};
 use crate::types::{Insets, WIDTH, HEIGHT};
 use crate::Axis;
+use crate::theme::Theme;
 use crate::scale::{TimeScale, ValueScale};
 // For time-aware axis formatting
 
@@ -18,6 +19,7 @@ pub struct RenderOptions {
     pub height: i32,
     pub insets: Insets,
     pub background: skia::Color,
+    pub theme: Theme,
     pub draw_labels: bool,   // draw axis labels (set false for deterministic tests)
     pub crisp_lines: bool,   // align 1px lines to half-pixels for sharpness
     pub crosshair: Option<(f32, f32)>, // device px; when Some, draw crosshair overlay
@@ -29,7 +31,8 @@ impl Default for RenderOptions {
             width: WIDTH,
             height: HEIGHT,
             insets: Insets::default(),
-            background: skia::Color::from_argb(255, 18, 18, 20), // near-black
+            background: skia::Color::from_argb(255, 18, 18, 20), // kept for backwards-compat; unused if theme provided
+            theme: Theme::dark(),
             draw_labels: true,
             crisp_lines: true,
             crosshair: None,
@@ -153,7 +156,7 @@ impl Chart {
 
     fn draw_into(&self, canvas: &skia::Canvas, opts: &RenderOptions) {
         // Background
-        canvas.clear(opts.background);
+        canvas.clear(opts.theme.background);
 
         // Plot rect
         let plot_left = opts.insets.left as i32;
@@ -162,7 +165,7 @@ impl Chart {
         let plot_bottom = opts.height - opts.insets.bottom as i32;
 
         // Grid & axes
-        draw_grid(canvas, plot_left, plot_top, plot_right, plot_bottom, opts.crisp_lines);
+        draw_grid(canvas, plot_left, plot_top, plot_right, plot_bottom, opts.crisp_lines, &opts.theme);
         draw_axes(
             canvas,
             plot_left,
@@ -173,25 +176,26 @@ impl Chart {
             &self.y_axis,
             opts.draw_labels,
             opts.crisp_lines,
+            &opts.theme,
         );
 
         // Series
         for s in &self.series {
             match s.series_type {
                 SeriesType::Line => draw_line_series(
-                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s,
+                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s, &opts.theme,
                 ),
                 SeriesType::Candlestick => draw_candle_series(
-                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s,
+                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s, &opts.theme,
                 ),
                 SeriesType::Bar => draw_bar_series(
-                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s,
+                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s, &opts.theme,
                 ),
                 SeriesType::Histogram => draw_histogram_series(
-                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s,
+                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s, &opts.theme,
                 ),
                 SeriesType::Baseline => draw_baseline_series(
-                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s,
+                    canvas, plot_left, plot_top, plot_right, plot_bottom, &self.x_axis, &self.y_axis, s, &opts.theme,
                 ),
             }
         }
@@ -203,7 +207,7 @@ impl Chart {
             let mut paint = skia::Paint::default();
             paint.set_anti_alias(false);
             paint.set_style(skia::paint::Style::Stroke);
-            paint.set_color(skia::Color::from_argb(255, 255, 230, 70));
+            paint.set_color(opts.theme.crosshair);
             paint.set_stroke_width(1.0);
             // horizontal
             canvas.draw_line((plot_left as f32, iy), (plot_right as f32, iy), &paint);
@@ -215,9 +219,9 @@ impl Chart {
 
 // ---- helpers ----------------------------------------------------------------
 
-fn draw_grid(canvas: &skia::Canvas, l: i32, t: i32, r: i32, b: i32, crisp: bool) {
+fn draw_grid(canvas: &skia::Canvas, l: i32, t: i32, r: i32, b: i32, crisp: bool, theme: &Theme) {
     let mut paint = skia::Paint::default();
-    paint.set_color(skia::Color::from_argb(255, 40, 40, 45));
+    paint.set_color(theme.grid);
     paint.set_anti_alias(true);
     paint.set_stroke_width(1.0);
 
@@ -243,9 +247,10 @@ fn draw_axes(
     y: &Axis,
     draw_labels: bool,
     crisp: bool,
+    theme: &Theme,
 ) {
     let mut axis_paint = skia::Paint::default();
-    axis_paint.set_color(skia::Color::from_argb(255, 180, 180, 190));
+    axis_paint.set_color(theme.axis_line);
     axis_paint.set_anti_alias(true);
     axis_paint.set_stroke_width(1.5);
 
@@ -257,7 +262,7 @@ fn draw_axes(
 
     if draw_labels {
         let mut paint_text = skia::Paint::default();
-        paint_text.set_color(skia::Color::from_argb(255, 235, 235, 245));
+        paint_text.set_color(theme.axis_label);
         paint_text.set_anti_alias(true);
         let mut font = choose_font(12.0);
 
@@ -283,7 +288,7 @@ fn draw_axes(
 
         // Tick paints
         let mut tick_paint = skia::Paint::default();
-        tick_paint.set_color(skia::Color::from_argb(255, 150, 150, 160));
+        tick_paint.set_color(theme.tick);
         tick_paint.set_anti_alias(true);
         tick_paint.set_stroke_width(1.0);
 
@@ -327,6 +332,7 @@ fn draw_line_series(
     x_axis: &Axis,
     y_axis: &Axis,
     series: &Series,
+    theme: &Theme,
 ) {
     let data = &series.data_xy;
     if data.len() < 2 {
@@ -352,7 +358,7 @@ fn draw_line_series(
     stroke.set_anti_alias(true);
     stroke.set_style(skia::paint::Style::Stroke);
     stroke.set_stroke_width(2.0);
-    stroke.set_color(skia::Color::from_argb(255, 64, 160, 255));
+    stroke.set_color(theme.line_stroke);
 
     canvas.draw_path(&path, &stroke);
 }
@@ -362,6 +368,7 @@ fn draw_candle_series(
     l: i32, t: i32, r: i32, b: i32,
     x_axis: &Axis, y_axis: &Axis,
     series: &Series,
+    theme: &Theme,
 ) {
     if series.data_ohlc.is_empty() { return; }
 
@@ -393,11 +400,7 @@ fn draw_candle_series(
         let y_c = sy(c.c);
 
         let up = c.c >= c.o;
-        let color = if up {
-            skia::Color::from_argb(255, 40, 200, 120)
-        } else {
-            skia::Color::from_argb(255, 220, 80, 80)
-        };
+        let color = if up { theme.candle_up } else { theme.candle_down };
 
         wick.set_color(color);
         body.set_color(color);
@@ -529,6 +532,7 @@ fn draw_bar_series(
     l: i32, t: i32, r: i32, b: i32,
     x_axis: &Axis, y_axis: &Axis,
     series: &Series,
+    theme: &Theme,
 ) {
     if series.data_ohlc.is_empty() { return; }
 
@@ -556,11 +560,7 @@ fn draw_bar_series(
         let y_c = sy(c.c);
 
         let up = c.c >= c.o;
-        let color = if up {
-            skia::Color::from_argb(255, 40, 200, 120)
-        } else {
-            skia::Color::from_argb(255, 220, 80, 80)
-        };
+        let color = if up { theme.candle_up } else { theme.candle_down };
         stroke.set_color(color);
 
         // main stem
@@ -577,6 +577,7 @@ fn draw_histogram_series(
     l: i32, t: i32, r: i32, b: i32,
     x_axis: &Axis, y_axis: &Axis,
     series: &Series,
+    theme: &Theme,
 ) {
     let data = &series.data_xy;
     if data.is_empty() { return; }
@@ -602,7 +603,7 @@ fn draw_histogram_series(
     let mut fill = skia::Paint::default();
     fill.set_anti_alias(true);
     fill.set_style(skia::paint::Style::Fill);
-    fill.set_color(skia::Color::from_argb(255, 96, 156, 255));
+    fill.set_color(theme.histogram);
 
     for &(xv, yv) in data {
         let x = sx(xv);
@@ -620,6 +621,7 @@ fn draw_baseline_series(
     l: i32, t: i32, r: i32, b: i32,
     x_axis: &Axis, y_axis: &Axis,
     series: &Series,
+    theme: &Theme,
 ) {
     let data = &series.data_xy;
     if data.len() < 2 { return; }
@@ -652,13 +654,13 @@ fn draw_baseline_series(
     let mut fill = skia::Paint::default();
     fill.set_anti_alias(true);
     fill.set_style(skia::paint::Style::Fill);
-    fill.set_color(skia::Color::from_argb(96, 64, 160, 255));
+    fill.set_color(theme.baseline_fill);
     canvas.draw_path(&area, &fill);
 
     let mut stroke = skia::Paint::default();
     stroke.set_anti_alias(true);
     stroke.set_style(skia::paint::Style::Stroke);
     stroke.set_stroke_width(2.0);
-    stroke.set_color(skia::Color::from_argb(255, 64, 160, 255));
+    stroke.set_color(theme.baseline_stroke);
     canvas.draw_path(&path, &stroke);
 }

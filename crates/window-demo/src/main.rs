@@ -1,7 +1,7 @@
 // File: crates/window-demo/src/main.rs
 // Windowed demo: shows chart-core in a window with crosshair, pan, and zoom.
 
-use chart_core::{Axis, Chart, RenderOptions, Series};
+use chart_core::{Axis, Chart, RenderOptions, Series, ViewState, Theme};
 use chart_core::series::{Candle, SeriesType};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -43,10 +43,12 @@ fn main() {
     let mut size = window.inner_size();
     let cursor_pos: Arc<Mutex<Option<(f64, f64)>>> = Arc::new(Mutex::new(None));
     let cursor_pos_draw = Arc::clone(&cursor_pos);
-    let view0 = compute_extents(&charts[idx]);
-    let view: Arc<Mutex<View>> = Arc::new(Mutex::new(view0));
+    let view0 = ViewState::from_chart(&charts[idx]);
+    let view: Arc<Mutex<ViewState>> = Arc::new(Mutex::new(view0));
     let view_draw = Arc::clone(&view);
     let mut dragging = false;
+    let theme_light: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    let theme_light_draw = Arc::clone(&theme_light);
 
     // Drawing closure
     let mut draw = move |charts: &mut [Chart]| {
@@ -60,15 +62,20 @@ fn main() {
         opts.width = w as i32;
         opts.height = h as i32;
         opts.draw_labels = true;
+        if let Some((cx, cy)) = *cursor_pos_draw.lock().unwrap() {
+            opts.crosshair = Some((cx as f32, cy as f32));
+        } else {
+            opts.crosshair = None;
+        }
+        // Theme selection
+        let is_light = *theme_light_draw.lock().unwrap();
+        opts.theme = if is_light { Theme::light() } else { Theme::dark() };
 
         // Apply current view to active chart
         let v = *view_draw.lock().unwrap();
         {
             let ch = &mut charts[idx];
-            ch.x_axis.min = v.x_min;
-            ch.x_axis.max = v.x_max;
-            ch.y_axis.min = v.y_min;
-            ch.y_axis.max = v.y_max;
+            v.apply_to_chart(ch);
         }
 
         // Render and blit
@@ -85,22 +92,7 @@ fn main() {
             frame[i] = (a << 24) | (r << 16) | (g << 8) | b; // ARGB
         }
 
-        // Crosshair overlay
-        if let Some((cx, cy)) = *cursor_pos_draw.lock().unwrap() {
-            let ix = cx.round().clamp(0.0, w as f64 - 1.0) as i32;
-            let iy = cy.round().clamp(0.0, h as f64 - 1.0) as i32;
-            let color: u32 = (0xFF << 24) | (255 << 16) | (230 << 8) | 70; // ARGB yellow
-            // Horizontal
-            let row = iy.max(0).min(h as i32 - 1) as usize;
-            for x in 0..(w as usize) {
-                frame[row * (w as usize) + x] = color;
-            }
-            // Vertical
-            let col = ix.max(0).min(w as i32 - 1) as usize;
-            for y in 0..(h as usize) {
-                frame[y * (w as usize) + col] = color;
-            }
-        }
+        // Crosshair drawn by chart-core using opts.crosshair
 
         if let Err(e) = frame.present() {
             eprintln!("present error: {e:?}");
@@ -133,33 +125,12 @@ fn main() {
                         let insets = RenderOptions::default().insets;
                         let w = size.width as i32;
                         let h = size.height as i32;
-                        let l = insets.left as f64;
-                        let rpx = (w - insets.right as i32) as f64;
-                        let t = insets.top as f64;
-                        let bpx = (h - insets.bottom as i32) as f64;
-                        let plot_w = (rpx - l).max(1.0);
-                        let plot_h = (bpx - t).max(1.0);
-                        let cx_clamped = cx.clamp(l, rpx);
-                        let cy_clamped = cy.clamp(t, bpx);
-                        let v = *view.lock().unwrap();
-                        let x_span = v.x_max - v.x_min;
-                        let y_span = v.y_max - v.y_min;
-                        let wx = v.x_min + (cx_clamped - l) / plot_w * x_span;
-                        let wy = v.y_max - (cy_clamped - t) / plot_h * y_span;
                         let scroll = match delta {
                             winit::event::MouseScrollDelta::LineDelta(_, y) => y as f64 * 0.1,
                             winit::event::MouseScrollDelta::PixelDelta(p) => (p.y as f64) / 240.0,
                         };
-                        let factor = (1.0 - scroll).clamp(0.1, 10.0);
-                        let nx = x_span * factor;
-                        let ny = y_span * factor;
                         let mut vmut = view.lock().unwrap();
-                        let rx = (wx - vmut.x_min) / x_span;
-                        let ry = (vmut.y_max - wy) / y_span;
-                        vmut.x_min = wx - rx * nx;
-                        vmut.x_max = vmut.x_min + nx;
-                        vmut.y_max = wy + ry * ny;
-                        vmut.y_min = vmut.y_max - ny;
+                        vmut.zoom_at_pixel(scroll, cx, cy, w, h, &insets);
                     }
                 }
                 WindowEvent::KeyboardInput { input, .. } => {
@@ -173,7 +144,7 @@ fn main() {
                         Some(VirtualKeyCode::Key4) | Some(VirtualKeyCode::Numpad4) => Some(3),
                         // Autoscale: A = full extents both axes; Y = autoscale Y on visible X range
                         Some(VirtualKeyCode::A) => {
-                            *view.lock().unwrap() = compute_extents(&charts[idx]);
+                            *view.lock().unwrap() = ViewState::from_chart(&charts[idx]);
                             window.set_title(&format!(
                                 "Constellation Chart - {}",
                                 series_title(idx)
@@ -181,13 +152,13 @@ fn main() {
                             None
                         }
                         Some(VirtualKeyCode::Y) => {
-                            let vcur = *view.lock().unwrap();
-                            if let Some((ymin, ymax)) = visible_y_range(&charts[idx], vcur.x_min, vcur.x_max) {
-                                let mut vmut = view.lock().unwrap();
-                                let m = (ymax - ymin) * 0.02;
-                                vmut.y_min = ymin - m;
-                                vmut.y_max = ymax + m;
-                            }
+                            let mut vmut = view.lock().unwrap();
+                            vmut.autoscale_y_visible(&charts[idx]);
+                            None
+                        }
+                        Some(VirtualKeyCode::T) => {
+                            let mut t = theme_light.lock().unwrap();
+                            *t = !*t; // toggle theme
                             None
                         }
                         Some(VirtualKeyCode::Escape) => {
@@ -199,7 +170,7 @@ fn main() {
                     if let Some(new_idx) = set_to {
                         if new_idx < charts.len() {
                             idx = new_idx;
-                            *view.lock().unwrap() = compute_extents(&charts[idx]);
+                            *view.lock().unwrap() = ViewState::from_chart(&charts[idx]);
                             window.set_title(&format!(
                                 "Constellation Chart - {}",
                                 series_title(idx)
@@ -218,17 +189,7 @@ fn main() {
                     let insets = RenderOptions::default().insets;
                     let w = size.width as i32;
                     let h = size.height as i32;
-                    let plot_w = ((w - insets.right as i32 - insets.left as i32) as f64).max(1.0);
-                    let plot_h = ((h - insets.bottom as i32 - insets.top as i32) as f64).max(1.0);
-                    let mut v = view.lock().unwrap();
-                    let x_span = v.x_max - v.x_min;
-                    let y_span = v.y_max - v.y_min;
-                    let wx = -dx as f64 / plot_w * x_span;
-                    let wy = dy as f64 / plot_h * y_span;
-                    v.x_min += wx;
-                    v.x_max += wx;
-                    v.y_min += wy;
-                    v.y_max += wy;
+                    view.lock().unwrap().pan_by_pixels(dx as f64, dy as f64, w, h, &insets);
                 }
             }
             Event::MainEventsCleared => {
@@ -296,39 +257,7 @@ fn build_charts(candles: &[Candle]) -> Vec<Chart> {
     vec![c1, c2, c3, c4]
 }
 
-// Compute Y range within a visible X window across all series; returns None if no points overlap.
-fn visible_y_range(chart: &Chart, x_min: f64, x_max: f64) -> Option<(f64, f64)> {
-    let mut y_min = f64::INFINITY;
-    let mut y_max = f64::NEG_INFINITY;
-    let mut any = false;
-    for s in &chart.series {
-        match s.series_type {
-            SeriesType::Line | SeriesType::Histogram | SeriesType::Baseline => {
-                for &(x, y) in &s.data_xy {
-                    if x >= x_min && x <= x_max {
-                        y_min = y_min.min(y);
-                        y_max = y_max.max(y);
-                        any = true;
-                    }
-                }
-                if let Some(b) = s.baseline { // include baseline reference
-                    y_min = y_min.min(b);
-                    y_max = y_max.max(b);
-                }
-            }
-            SeriesType::Candlestick | SeriesType::Bar => {
-                for c in &s.data_ohlc {
-                    if c.t >= x_min && c.t <= x_max {
-                        y_min = y_min.min(c.l);
-                        y_max = y_max.max(c.h);
-                        any = true;
-                    }
-                }
-            }
-        }
-    }
-    if any { Some((y_min, y_max)) } else { None }
-}
+// visible_y_range is now in chart_core::view (via ViewState::autoscale_y_visible)
 
 fn resolve_path_simple(raw: &str) -> (PathBuf, bool) {
     let p = Path::new(raw);
@@ -452,62 +381,4 @@ fn minmax_xy(v: &[(f64, f64)]) -> (f64, f64) {
     (min_v, max_v)
 }
 
-#[derive(Clone, Copy)]
-struct View {
-    x_min: f64,
-    x_max: f64,
-    y_min: f64,
-    y_max: f64,
-}
-
-fn compute_extents(chart: &Chart) -> View {
-    let mut x_min = f64::INFINITY;
-    let mut x_max = f64::NEG_INFINITY;
-    let mut y_min = f64::INFINITY;
-    let mut y_max = f64::NEG_INFINITY;
-    for s in &chart.series {
-        match s.series_type {
-            SeriesType::Line | SeriesType::Histogram | SeriesType::Baseline => {
-                for &(x, y) in &s.data_xy {
-                    x_min = x_min.min(x);
-                    x_max = x_max.max(x);
-                    y_min = y_min.min(y);
-                    y_max = y_max.max(y);
-                }
-                if let Some(b) = s.baseline {
-                    y_min = y_min.min(b);
-                    y_max = y_max.max(b);
-                }
-            }
-            SeriesType::Candlestick | SeriesType::Bar => {
-                for c in &s.data_ohlc {
-                    x_min = x_min.min(c.t);
-                    x_max = x_max.max(c.t);
-                    y_min = y_min.min(c.l);
-                    y_max = y_max.max(c.h);
-                }
-            }
-        }
-    }
-    if !x_min.is_finite() || !x_max.is_finite() || !y_min.is_finite() || !y_max.is_finite() {
-        return View {
-            x_min: 0.0,
-            x_max: 1.0,
-            y_min: 0.0,
-            y_max: 1.0,
-        };
-    }
-    if (x_max - x_min).abs() < 1e-9 {
-        x_max = x_min + 1.0;
-    }
-    if (y_max - y_min).abs() < 1e-9 {
-        y_max = y_min + 1.0;
-    }
-    let ym = (y_max - y_min) * 0.02;
-    View {
-        x_min,
-        x_max,
-        y_min: y_min - ym,
-        y_max: y_max + ym,
-    }
-}
+// compute_extents replaced by ViewState::from_chart

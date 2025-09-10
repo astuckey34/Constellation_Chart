@@ -8,7 +8,11 @@ pub mod grid;
 pub mod types;
 pub mod geometry;
 pub mod scale;
+pub mod view;
+pub mod theme;
 
 pub use chart::{Chart, RenderOptions};
 pub use series::{Series, SeriesType};
 pub use axis::Axis;
+pub use view::ViewState;
+pub use theme::Theme;
