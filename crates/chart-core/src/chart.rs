@@ -8,6 +8,9 @@ use crate::grid::linspace;
 use crate::series::{Series, SeriesType};
 use crate::types::{Insets, WIDTH, HEIGHT};
 use crate::Axis;
+use crate::scale::{TimeScale, ValueScale};
+// For time-aware axis formatting
+
 
 
 pub struct RenderOptions {
@@ -17,6 +20,7 @@ pub struct RenderOptions {
     pub background: skia::Color,
     pub draw_labels: bool,   // draw axis labels (set false for deterministic tests)
     pub crisp_lines: bool,   // align 1px lines to half-pixels for sharpness
+    pub crosshair: Option<(f32, f32)>, // device px; when Some, draw crosshair overlay
 }
 
 impl Default for RenderOptions {
@@ -28,6 +32,7 @@ impl Default for RenderOptions {
             background: skia::Color::from_argb(255, 18, 18, 20), // near-black
             draw_labels: true,
             crisp_lines: true,
+            crosshair: None,
         }
     }
 }
@@ -190,6 +195,21 @@ impl Chart {
                 ),
             }
         }
+
+        // Crosshair overlay (if provided)
+        if let Some((cx, cy)) = opts.crosshair {
+            let ix = cx.clamp(plot_left as f32, (plot_right - 1) as f32);
+            let iy = cy.clamp(plot_top as f32, (plot_bottom - 1) as f32);
+            let mut paint = skia::Paint::default();
+            paint.set_anti_alias(false);
+            paint.set_style(skia::paint::Style::Stroke);
+            paint.set_color(skia::Color::from_argb(255, 255, 230, 70));
+            paint.set_stroke_width(1.0);
+            // horizontal
+            canvas.draw_line((plot_left as f32, iy), (plot_right as f32, iy), &paint);
+            // vertical
+            canvas.draw_line((ix, plot_top as f32), (ix, plot_bottom as f32), &paint);
+        }
     }
 }
 
@@ -232,18 +252,69 @@ fn draw_axes(
     // X and Y axis lines
     let bx = if crisp { align_half(b as f32) } else { b as f32 };
     let lx = if crisp { align_half(l as f32) } else { l as f32 };
-    let rx = if crisp { align_half(r as f32) } else { r as f32 };
-    let ty = if crisp { align_half(t as f32) } else { t as f32 };
     canvas.draw_line((l as f32, bx), (r as f32, bx), &axis_paint);
     canvas.draw_line((lx, t as f32), (lx, b as f32), &axis_paint);
 
     if draw_labels {
         let mut paint_text = skia::Paint::default();
-        paint_text.set_color(skia::Color::from_argb(255, 210, 210, 220));
-        let mut font = skia::Font::default();
-        font.set_size(14.0);
-        canvas.draw_str(&x.label, (r as f32 - 80.0, b as f32 + 24.0), &font, &paint_text);
-        canvas.draw_str(&y.label, (l as f32 - 56.0, t as f32 + 14.0), &font, &paint_text);
+        paint_text.set_color(skia::Color::from_argb(255, 235, 235, 245));
+        paint_text.set_anti_alias(true);
+        let mut font = choose_font(12.0);
+
+        // Draw axis titles
+        canvas.draw_str(&x.label, (r as f32 - 80.0, b as f32 + 28.0), &font, &paint_text);
+        canvas.draw_str(&y.label, (l as f32 + 8.0, t as f32 + 14.0), &font, &paint_text);
+
+        // Ticks configuration
+        let target_xticks = 8usize;
+        let target_yticks = 6usize;
+
+        // Compute "nice" ticks in value space
+        let xticks = nice_ticks(x.min, x.max, target_xticks.max(2));
+        let yticks = nice_ticks(y.min, y.max, target_yticks.max(2));
+
+        // Build scales to place ticks in pixel space
+        let xspan = (x.max - x.min).max(1e-9);
+        let ts = TimeScale::new(l as f32, x.min, ((r - l) as f32) / (xspan as f32));
+        let vs = ValueScale::new(t as f32, b as f32, y.min, y.max);
+
+        let sx = |vx: f64| -> f32 { ts.to_px(vx) };
+        let sy = |vy: f64| -> f32 { vs.to_px(vy) };
+
+        // Tick paints
+        let mut tick_paint = skia::Paint::default();
+        tick_paint.set_color(skia::Color::from_argb(255, 150, 150, 160));
+        tick_paint.set_anti_alias(true);
+        tick_paint.set_stroke_width(1.0);
+
+        // X ticks and labels (bottom)
+        for vx in xticks.iter().copied() {
+            if !vx.is_finite() { continue; }
+            let xpx = if crisp { align_half(sx(vx)) } else { sx(vx) };
+            // small tick up from baseline
+            canvas.draw_line((xpx, bx), (xpx, bx - 6.0), &tick_paint);
+            // label
+            let label = if detect_time_like(x.min, x.max).is_some() {
+                format_time_tick(vx, x.min, x.max)
+            } else {
+                format_tick(vx, x.min, x.max)
+            };
+            // center roughly: shift by half label width
+            let advance = font.measure_str(&label, Some(&paint_text)).0;
+            canvas.draw_str(label, (xpx - advance * 0.5, b as f32 + 18.0), &font, &paint_text);
+        }
+
+        // Y ticks and labels (left)
+        for vy in yticks.iter().copied() {
+            if !vy.is_finite() { continue; }
+            let ypx = if crisp { align_half(sy(vy)) } else { sy(vy) };
+            // small tick to the right from axis
+            canvas.draw_line((lx, ypx), (lx + 6.0, ypx), &tick_paint);
+            // label to the left of axis, right-aligned
+            let label = format_tick(vy, y.min, y.max);
+            let advance = font.measure_str(&label, Some(&paint_text)).0;
+            canvas.draw_str(label, (l as f32 - 8.0 - advance, ypx + 4.0), &font, &paint_text);
+        }
     }
 }
 
@@ -262,11 +333,12 @@ fn draw_line_series(
         return;
     }
 
-    // Scale helpers
+    // Scale helpers via TimeScale/ValueScale
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
-    let yspan = (y_axis.max - y_axis.min).max(1e-9);
-    let sx = |x: f64| -> f32 { l as f32 + ((x - x_axis.min) / xspan) as f32 * (r - l) as f32 };
-    let sy = |y: f64| -> f32 { b as f32 - ((y - y_axis.min) / yspan) as f32 * (b - t) as f32 };
+    let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
+    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let sx = |x: f64| -> f32 { ts.to_px(x) };
+    let sy = |y: f64| -> f32 { vs.to_px(y) };
 
     let mut path = skia::Path::new();
     let (x0, y0) = data[0];
@@ -294,9 +366,10 @@ fn draw_candle_series(
     if series.data_ohlc.is_empty() { return; }
 
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
-    let yspan = (y_axis.max - y_axis.min).max(1e-9);
-    let sx = |x: f64| -> f32 { l as f32 + ((x - x_axis.min) / xspan) as f32 * (r - l) as f32 };
-    let sy = |y: f64| -> f32 { b as f32 - ((y - y_axis.min) / yspan) as f32 * (b - t) as f32 };
+    let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
+    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let sx = |x: f64| -> f32 { ts.to_px(x) };
+    let sy = |y: f64| -> f32 { vs.to_px(y) };
 
     // style
     let mut wick = skia::Paint::default();
@@ -346,6 +419,111 @@ fn align_half(v: f32) -> f32 {
     v.floor() + 0.5
 }
 
+fn choose_font(size: f32) -> skia::Font {
+    // Try a chain of common families using the system font manager so text draws across platforms.
+    let families = [
+        "Segoe UI",       // Windows
+        "Arial",          // Windows/macOS
+        "Helvetica",      // macOS
+        "Roboto",         // Linux/Android
+        "DejaVu Sans",    // Linux
+    ];
+    let fm = skia::FontMgr::default();
+    for fam in families.iter() {
+        if let Some(tf) = fm.match_family_style(fam, skia::FontStyle::normal()) {
+            let mut f = skia::Font::from_typeface(tf, size);
+            f.set_edging(skia::font::Edging::SubpixelAntiAlias);
+            return f;
+        }
+    }
+    let mut f = skia::Font::default();
+    f.set_size(size);
+    f.set_edging(skia::font::Edging::SubpixelAntiAlias);
+    f
+}
+
+// Generate "nice" tick positions over [min, max]
+fn nice_ticks(min: f64, max: f64, target: usize) -> Vec<f64> {
+    if !min.is_finite() || !max.is_finite() || target < 2 { return vec![]; }
+    let span = (max - min).abs();
+    if span <= 0.0 { return vec![min]; }
+    let raw_step = span / (target as f64);
+    let step = nice_step(raw_step);
+    let start = (min / step).ceil() * step;
+    let end = (max / step).floor() * step;
+    let mut out = Vec::new();
+    let mut v = start;
+    // guard against infinite loops
+    for _ in 0..(target * 4) {
+        if v > end + step * 0.5 { break; }
+        out.push(v);
+        v += step;
+    }
+    out
+}
+
+fn nice_step(raw: f64) -> f64 {
+    // 1-2-5 scheme scaled by power of 10
+    let power = raw.abs().log10().floor();
+    let base = 10f64.powf(power);
+    let n = raw / base;
+    let nice = if n <= 1.0 { 1.0 } else if n <= 2.0 { 2.0 } else if n <= 5.0 { 5.0 } else { 10.0 };
+    nice * base
+}
+
+fn format_tick(v: f64, min: f64, max: f64) -> String {
+    let span = (max - min).abs().max(1e-12);
+    let mag = span.abs().log10();
+    let decimals = if mag >= 6.0 { 0 } else if mag >= 3.0 { 1 } else if mag >= 1.0 { 2 } else { 3 };
+    format!("{:.*}", decimals as usize, v)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimeUnit { Seconds, Millis }
+
+fn detect_time_like(min: f64, max: f64) -> Option<TimeUnit> {
+    if !min.is_finite() || !max.is_finite() { return None; }
+    let lo = min.min(max);
+    let hi = min.max(max);
+    // Heuristics: UNIX epoch seconds (>= 2000-01-01 ~ 946684800)
+    if lo >= 800_000_000.0 && hi < 4_000_000_000.0 { return Some(TimeUnit::Seconds); }
+    // Milliseconds epoch ~ > 1e12
+    if lo >= 1_000_000_000_000.0 && hi < 10_000_000_000_000.0 { return Some(TimeUnit::Millis); }
+    None
+}
+
+fn format_time_tick(v: f64, min: f64, max: f64) -> String {
+    let unit = detect_time_like(min, max).unwrap_or(TimeUnit::Seconds);
+    // Convert to seconds resolution for formatting
+    let secs = match unit {
+        TimeUnit::Seconds => v,
+        TimeUnit::Millis => v / 1000.0,
+    };
+    let span_secs = match unit {
+        TimeUnit::Seconds => (max - min).abs(),
+        TimeUnit::Millis => ((max - min).abs()) / 1000.0,
+    };
+    // Choose format based on total span
+    let fmt = if span_secs < 120.0 {
+        "%H:%M:%S"
+    } else if span_secs < 7200.0 {
+        "%H:%M"
+    } else if span_secs < 86_400.0 {
+        "%m-%d %H:%M"
+    } else if span_secs < 31.0 * 86_400.0 {
+        "%m-%d"
+    } else {
+        "%Y-%m-%d"
+    };
+    let secs_i = if secs.is_finite() { secs.floor() as i64 } else { 0 };
+    if let Some(dt) = chrono::NaiveDateTime::from_timestamp_opt(secs_i, 0) {
+        dt.format(fmt).to_string()
+    } else {
+        // Fallback to numeric
+        format_tick(v, min, max)
+    }
+}
+
 fn draw_bar_series(
     canvas: &skia::Canvas,
     l: i32, t: i32, r: i32, b: i32,
@@ -355,9 +533,10 @@ fn draw_bar_series(
     if series.data_ohlc.is_empty() { return; }
 
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
-    let yspan = (y_axis.max - y_axis.min).max(1e-9);
-    let sx = |x: f64| -> f32 { l as f32 + ((x - x_axis.min) / xspan) as f32 * (r - l) as f32 };
-    let sy = |y: f64| -> f32 { b as f32 - ((y - y_axis.min) / yspan) as f32 * (b - t) as f32 };
+    let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
+    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let sx = |x: f64| -> f32 { ts.to_px(x) };
+    let sy = |y: f64| -> f32 { vs.to_px(y) };
 
     let mut stroke = skia::Paint::default();
     stroke.set_anti_alias(true);
@@ -403,9 +582,10 @@ fn draw_histogram_series(
     if data.is_empty() { return; }
 
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
-    let yspan = (y_axis.max - y_axis.min).max(1e-9);
-    let sx = |x: f64| -> f32 { l as f32 + ((x - x_axis.min) / xspan) as f32 * (r - l) as f32 };
-    let sy = |y: f64| -> f32 { b as f32 - ((y - y_axis.min) / yspan) as f32 * (b - t) as f32 };
+    let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
+    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let sx = |x: f64| -> f32 { ts.to_px(x) };
+    let sy = |y: f64| -> f32 { vs.to_px(y) };
 
     let baseline_val = series.baseline.unwrap_or(0.0);
     let y0 = sy(baseline_val);
@@ -445,9 +625,10 @@ fn draw_baseline_series(
     if data.len() < 2 { return; }
 
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
-    let yspan = (y_axis.max - y_axis.min).max(1e-9);
-    let sx = |x: f64| -> f32 { l as f32 + ((x - x_axis.min) / xspan) as f32 * (r - l) as f32 };
-    let sy = |y: f64| -> f32 { b as f32 - ((y - y_axis.min) / yspan) as f32 * (b - t) as f32 };
+    let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
+    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let sx = |x: f64| -> f32 { ts.to_px(x) };
+    let sy = |y: f64| -> f32 { vs.to_px(y) };
 
     let baseline_val = series.baseline.unwrap_or(0.0);
     let y0 = sy(baseline_val);

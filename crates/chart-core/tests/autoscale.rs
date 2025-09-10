@@ -1,7 +1,7 @@
 // File: crates/chart-core/tests/autoscale.rs
 // Purpose: Validate autoscale over mixed series types.
 
-use chart_core::{Axis, Chart, Series};
+use chart_core::{Chart, Series};
 use chart_core::series::{Candle, SeriesType};
 
 #[test]

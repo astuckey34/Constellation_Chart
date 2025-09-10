@@ -68,7 +68,7 @@ fn golden_bars() {
 #[test]
 fn golden_histogram() {
     let data = (0..10).map(|i| (i as f64, ((i as f64) - 4.0) * 0.4)).collect::<Vec<_>>();
-    let bytes = render_to_bytes(|c| c.add_series(Series::with_data(SeriesType::Histogram, data).with_baseline(0.0)), "X", "Δ");
+    let bytes = render_to_bytes(|c| c.add_series(Series::with_data(SeriesType::Histogram, data).with_baseline(0.0)), "X", "Y");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/__snapshots__/histogram.png");
     write_or_compare(&path, &bytes);
 }
@@ -82,3 +82,4 @@ fn golden_baseline() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/__snapshots__/baseline.png");
     write_or_compare(&path, &bytes);
 }
+

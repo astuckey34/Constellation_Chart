@@ -1,4 +1,5 @@
 
+<!-- See docs/CONSULTANT_ADDENDUM.md for expert architecture & guidance. -->
 ---
 
 # 📊 PRD: Constellation Chart vs TradingView Lightweight-Charts
@@ -161,7 +162,6 @@ Here’s why this matters to me:
   - [x] Skia raster surface PNG rendering (headless) implemented (see `crates/chart-core/src/chart.rs:1`).
   - [x] Static series rendering for line and candlestick; grid lines drawn (see `crates/chart-core/src/chart.rs:1`).
   - [x] Basic time/price axes model and drawing (see `crates/chart-core/src/axis.rs:1`).
-- [~] Rendering fidelity validation: demo produces PNGs; golden snapshot tests are placeholders (see `tests/rendering.rs:1`).
 - [x] Rendering fidelity validation: crisp 1px grid/axes (half-pixel alignment), deterministic snapshots (labels off in tests), and golden images for all series types (see `crates/chart-core/tests/snapshot*.rs:1`).
 
 - Parity Layer:
