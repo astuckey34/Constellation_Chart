@@ -10,22 +10,44 @@ use winit::event::{Event, MouseButton, WindowEvent, ElementState, VirtualKeyCode
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
+#[cfg(feature = "gpu-gl-demo")]
+pub mod gpu_gl_demo;
+
 fn main() {
-    // Arg: CSV path (supports .csv/.cvs swap)
-    let raw = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "binanceus_CRVUSDT_6h_2023-09-13_to_2025-01-21.cvs".to_string());
-    let (path, _used_alt) = resolve_path_simple(&raw);
+    #[cfg(feature = "gpu-gl-demo")]
+    if std::env::args().any(|a| a == "--gpu") {
+        // Run the GPU GL demo path (experimental)
+        match crate::gpu_gl_demo::run() {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("[gpu] failed to start GPU demo: {e}");
+                // Fall back to CPU path below
+            }
+        }
+    }
+
+    // Arg: CSV path (supports .csv/.cvs swap). Ignore option-like args (e.g., --gpu)
+    let raw = std::env::args().nth(1).filter(|a| !a.starts_with('-'))
+        .unwrap_or_else(|| "CRVUSDT_6h.csv".to_string());
+    let (mut path, _used_alt) = resolve_path_simple(&raw);
+    if !path.exists() {
+        // Fallback to known sample files
+        for cand in ["CRVUSDT_6h.csv", "BTCUSDT_1m_100.csv", "ETHUSDT_1m_500.csv"] {
+            let p = std::path::PathBuf::from(cand);
+            if p.exists() { path = p; break; }
+        }
+    }
 
     // Load data
     let candles = load_ohlc_csv(&path);
     if candles.is_empty() {
-        eprintln!("no candles loaded");
+        eprintln!("No candles loaded. Provide a CSV path or place a sample like CRVUSDT_6h.csv in the project root.");
         return;
     }
 
-    // Prepare charts for multiple series types
-    let mut charts = build_charts(&candles);
+    // Prepare charts for multiple series types with optional downsampling
+    let mut downsample = true; // toggle with 'D'
+    let mut charts = build_charts(&candles, downsample, 1024);
 
     // Window + softbuffer
     let event_loop = EventLoop::new();
@@ -47,10 +69,14 @@ fn main() {
     let view: Arc<Mutex<ViewState>> = Arc::new(Mutex::new(view0));
     let view_draw = Arc::clone(&view);
     let mut dragging = false;
-    let theme_light: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-    let theme_light_draw = Arc::clone(&theme_light);
+    let themes: Arc<Vec<Theme>> = Arc::new(chart_core::theme::presets());
+    let theme_idx: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
+    let theme_idx_draw = Arc::clone(&theme_idx);
+    let themes_draw = Arc::clone(&themes);
 
     // Drawing closure
+    let dpr: Arc<Mutex<f32>> = Arc::new(Mutex::new(window.scale_factor() as f32));
+    let dpr_draw = Arc::clone(&dpr);
     let mut draw = move |charts: &mut [Chart]| {
         let w = size.width.max(1);
         let h = size.height.max(1);
@@ -61,15 +87,18 @@ fn main() {
         let mut opts = RenderOptions::default();
         opts.width = w as i32;
         opts.height = h as i32;
+        opts.dpr = *dpr_draw.lock().unwrap();
         opts.draw_labels = true;
+        opts.show_tooltip = true;
         if let Some((cx, cy)) = *cursor_pos_draw.lock().unwrap() {
             opts.crosshair = Some((cx as f32, cy as f32));
         } else {
             opts.crosshair = None;
         }
         // Theme selection
-        let is_light = *theme_light_draw.lock().unwrap();
-        opts.theme = if is_light { Theme::light() } else { Theme::dark() };
+        let idx_theme = *theme_idx_draw.lock().unwrap();
+        let t = themes_draw.get(idx_theme % themes_draw.len()).copied().unwrap_or(Theme::dark());
+        opts.theme = t;
 
         // Apply current view to active chart
         let v = *view_draw.lock().unwrap();
@@ -100,7 +129,7 @@ fn main() {
     };
 
     // Event loop
-    let mut control_flow = ControlFlow::Wait;
+    let control_flow = ControlFlow::Wait;
     event_loop.run(move |event, _, cf| {
         *cf = control_flow;
         match event {
@@ -110,6 +139,11 @@ fn main() {
                 }
                 WindowEvent::Resized(new_size) => {
                     size = new_size;
+                    if downsample {
+                        charts = build_charts(&candles, downsample, size.width as usize);
+                        *view.lock().unwrap() = ViewState::from_chart(&charts[idx]);
+                    }
+                    *dpr.lock().unwrap() = window.scale_factor() as f32;
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     *cursor_pos.lock().unwrap() = Some((position.x, position.y));
@@ -145,10 +179,25 @@ fn main() {
                         // Autoscale: A = full extents both axes; Y = autoscale Y on visible X range
                         Some(VirtualKeyCode::A) => {
                             *view.lock().unwrap() = ViewState::from_chart(&charts[idx]);
+                            let ti = *theme_idx.lock().unwrap();
                             window.set_title(&format!(
-                                "Constellation Chart - {}",
-                                series_title(idx)
+                                "Constellation Chart - {} | {}{}",
+                                series_title(idx),
+                                themes.get(ti % themes.len()).map(|t| t.name).unwrap_or("dark"),
+                                if downsample { " | DS:on" } else { " | DS:off" }
                             ));
+                            None
+                        }
+                        Some(VirtualKeyCode::L) => {
+                            // Toggle Y-axis scale (Linear <-> Log10)
+                            use chart_core::axis::ScaleKind;
+                            let ch = &mut charts[idx];
+                            ch.y_axis.kind = if ch.y_axis.kind == ScaleKind::Linear { ScaleKind::Log10 } else { ScaleKind::Linear };
+                            // Ensure positive range for log
+                            if ch.y_axis.kind == ScaleKind::Log10 {
+                                if ch.y_axis.min <= 0.0 { ch.y_axis.min = 1e-6; }
+                            }
+                            *view.lock().unwrap() = ViewState::from_chart(&charts[idx]);
                             None
                         }
                         Some(VirtualKeyCode::Y) => {
@@ -156,9 +205,29 @@ fn main() {
                             vmut.autoscale_y_visible(&charts[idx]);
                             None
                         }
+                        Some(VirtualKeyCode::D) => {
+                            // Toggle downsampling and rebuild to match current width
+                            downsample = !downsample;
+                            charts = build_charts(&candles, downsample, size.width as usize);
+                            *view.lock().unwrap() = ViewState::from_chart(&charts[idx]);
+                            let ti = *theme_idx.lock().unwrap();
+                            window.set_title(&format!(
+                                "Constellation Chart - {} | {}{}",
+                                series_title(idx),
+                                themes.get(ti % themes.len()).map(|t| t.name).unwrap_or("dark"),
+                                if downsample { " | DS:on" } else { " | DS:off" }
+                            ));
+                            None
+                        }
                         Some(VirtualKeyCode::T) => {
-                            let mut t = theme_light.lock().unwrap();
-                            *t = !*t; // toggle theme
+                            let mut ti = theme_idx.lock().unwrap();
+                            *ti = (*ti + 1) % themes.len();
+                            window.set_title(&format!(
+                                "Constellation Chart - {} | {}{}",
+                                series_title(idx),
+                                themes.get(*ti % themes.len()).map(|t| t.name).unwrap_or("dark"),
+                                if downsample { " | DS:on" } else { " | DS:off" }
+                            ));
                             None
                         }
                         Some(VirtualKeyCode::Escape) => {
@@ -171,9 +240,12 @@ fn main() {
                         if new_idx < charts.len() {
                             idx = new_idx;
                             *view.lock().unwrap() = ViewState::from_chart(&charts[idx]);
+                            let ti = *theme_idx.lock().unwrap();
                             window.set_title(&format!(
-                                "Constellation Chart - {}",
-                                series_title(idx)
+                                "Constellation Chart - {} | {}{}",
+                                series_title(idx),
+                                themes.get(ti % themes.len()).map(|t| t.name).unwrap_or("dark"),
+                                if downsample { " | DS:on" } else { " | DS:off" }
                             ));
                         }
                     }
@@ -213,28 +285,33 @@ fn series_title(idx: usize) -> &'static str {
     }
 }
 
-fn build_charts(candles: &[Candle]) -> Vec<Chart> {
+fn build_charts(candles: &[Candle], enable_downsample: bool, target_width_px: usize) -> Vec<Chart> {
     let n = candles.len();
     let (min_p, max_p) = minmax_price(candles);
+    let insets = RenderOptions::default().insets;
+    let plot_w = target_width_px.saturating_sub((insets.left + insets.right) as usize).max(400);
+    let target_points = plot_w; // approx 1 point per pixel
+    let bucket = if enable_downsample && n > target_points { ((n as f64) / (target_points as f64)).ceil() as usize } else { 1 };
 
     // 1) Candles
     let mut c1 = Chart::new();
     c1.x_axis = Axis::new("Time", 0.0, (n - 1) as f64);
     c1.y_axis = Axis::new("Price", min_p, max_p * 1.02);
-    c1.add_series(Series::from_candles(candles.to_vec()));
+    c1.add_series(Series::from_candles(candles.to_vec()).aggregate_ohlc(bucket));
 
     // 2) Bars
     let mut c2 = Chart::new();
     c2.x_axis = Axis::new("Time", 0.0, (n - 1) as f64);
     c2.y_axis = Axis::new("Price", min_p, max_p * 1.02);
-    c2.add_series(Series::from_candles_as(SeriesType::Bar, candles.to_vec()));
+    c2.add_series(Series::from_candles_as(SeriesType::Bar, candles.to_vec()).aggregate_ohlc(bucket));
 
     // 3) Histogram of close-open
-    let xy_diff: Vec<(f64, f64)> = candles
+    let xy_diff_full: Vec<(f64, f64)> = candles
         .iter()
         .enumerate()
         .map(|(i, c)| (i as f64, c.c - c.o))
         .collect();
+    let xy_diff: Vec<(f64, f64)> = if enable_downsample && n > target_points { chart_core::lttb(&xy_diff_full, target_points) } else { xy_diff_full };
     let (min_h, max_h) = minmax_xy(&xy_diff);
     let mut c3 = Chart::new();
     c3.x_axis = Axis::new("Index", 0.0, (n - 1) as f64);
@@ -242,11 +319,12 @@ fn build_charts(candles: &[Candle]) -> Vec<Chart> {
     c3.add_series(Series::with_data(SeriesType::Histogram, xy_diff).with_baseline(0.0));
 
     // 4) Baseline of closes vs average
-    let xy_close: Vec<(f64, f64)> = candles
+    let xy_close_full: Vec<(f64, f64)> = candles
         .iter()
         .enumerate()
         .map(|(i, c)| (i as f64, c.c))
         .collect();
+    let xy_close: Vec<(f64, f64)> = if enable_downsample && n > target_points { chart_core::lttb(&xy_close_full, target_points) } else { xy_close_full };
     let avg_close = candles.iter().map(|c| c.c).sum::<f64>() / (n as f64);
     let (min_c, max_c) = minmax_xy(&xy_close);
     let mut c4 = Chart::new();
@@ -289,16 +367,14 @@ fn swap_ext(p: &Path) -> Option<std::path::PathBuf> {
 }
 
 fn load_ohlc_csv(path: &Path) -> Vec<Candle> {
-    let mut rdr = csv::ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(path)
-        .expect("open csv");
-    let headers = rdr
-        .headers()
-        .expect("headers")
-        .iter()
-        .map(|h| h.to_lowercase())
-        .collect::<Vec<_>>();
+    let mut rdr = match csv::ReaderBuilder::new().has_headers(true).from_path(path) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let headers = match rdr.headers() {
+        Ok(h) => h.iter().map(|h| h.to_lowercase()).collect::<Vec<_>>(),
+        Err(_) => return Vec::new(),
+    };
     let idx = |names: &[&str]| -> Option<usize> {
         for (i, h) in headers.iter().enumerate() {
             for want in names {

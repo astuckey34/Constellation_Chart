@@ -1,0 +1,14 @@
+C:\GitHub\Constellation_Chart\target\debug\deps\skia_bindings-f2c8034638d01014.d: C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\lib.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\defaults.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\impls.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\icu.rs C:\GitHub\Constellation_Chart\target\debug\build\skia-bindings-b7037635e6d2a410\out/skia/bindings.rs C:\GitHub\Constellation_Chart\target\debug\build\skia-bindings-b7037635e6d2a410\out/skia/icudtl.dat
+
+C:\GitHub\Constellation_Chart\target\debug\deps\libskia_bindings-f2c8034638d01014.rlib: C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\lib.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\defaults.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\impls.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\icu.rs C:\GitHub\Constellation_Chart\target\debug\build\skia-bindings-b7037635e6d2a410\out/skia/bindings.rs C:\GitHub\Constellation_Chart\target\debug\build\skia-bindings-b7037635e6d2a410\out/skia/icudtl.dat
+
+C:\GitHub\Constellation_Chart\target\debug\deps\libskia_bindings-f2c8034638d01014.rmeta: C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\lib.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\defaults.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\impls.rs C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\icu.rs C:\GitHub\Constellation_Chart\target\debug\build\skia-bindings-b7037635e6d2a410\out/skia/bindings.rs C:\GitHub\Constellation_Chart\target\debug\build\skia-bindings-b7037635e6d2a410\out/skia/icudtl.dat
+
+C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\lib.rs:
+C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\defaults.rs:
+C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\impls.rs:
+C:\Users\andre\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\skia-bindings-0.88.0\src\icu.rs:
+C:\GitHub\Constellation_Chart\target\debug\build\skia-bindings-b7037635e6d2a410\out/skia/bindings.rs:
+C:\GitHub\Constellation_Chart\target\debug\build\skia-bindings-b7037635e6d2a410\out/skia/icudtl.dat:
+
+# env-dep:OUT_DIR=C:\\GitHub\\Constellation_Chart\\target\\debug\\build\\skia-bindings-b7037635e6d2a410\\out

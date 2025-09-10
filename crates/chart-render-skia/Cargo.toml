@@ -9,3 +9,7 @@ edition = "2021"
 chart-core = { path = "../chart-core" }
 skia-safe = { workspace = true }
 
+[features]
+default = []
+# When enabling this feature, the crate compiles Skia's GL backend types and GPU helpers.
+gpu-gl = ["skia-safe/gl"]

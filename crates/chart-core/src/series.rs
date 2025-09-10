@@ -36,6 +36,7 @@ impl Candle {
     }
 }
 
+#[derive(Clone)]
 pub struct Series {
     pub series_type: SeriesType,
     pub data_xy: Vec<(f64, f64)>,     // used by Line/Histogram/Baseline
@@ -67,4 +68,32 @@ impl Series {
 
     /// Get baseline value or default (0.0) when not set.
     pub fn baseline_value(&self) -> f64 { self.baseline.unwrap_or(0.0) }
+
+    /// Downsample XY data (Line/Histogram/Baseline) using LTTB to at most `max_points`.
+    pub fn downsample_xy_lttb(&self, max_points: usize) -> Self {
+        use crate::downsample::lttb;
+        match self.series_type {
+            SeriesType::Line | SeriesType::Histogram | SeriesType::Baseline => {
+                let data = if self.data_xy.len() > max_points && max_points >= 2 {
+                    lttb(&self.data_xy, max_points)
+                } else {
+                    self.data_xy.clone()
+                };
+                Series { series_type: self.series_type, data_xy: data, data_ohlc: Vec::new(), baseline: self.baseline }
+            }
+            _ => self.clone(),
+        }
+    }
+
+    /// Aggregate OHLC (Candlestick/Bar) into buckets of `bucket` width.
+    pub fn aggregate_ohlc(&self, bucket: usize) -> Self {
+        use crate::downsample::aggregate_ohlc_buckets;
+        match self.series_type {
+            SeriesType::Candlestick | SeriesType::Bar => {
+                let data = if bucket > 1 { aggregate_ohlc_buckets(&self.data_ohlc, bucket) } else { self.data_ohlc.clone() };
+                Series { series_type: self.series_type, data_xy: Vec::new(), data_ohlc: data, baseline: self.baseline }
+            }
+            _ => self.clone(),
+        }
+    }
 }

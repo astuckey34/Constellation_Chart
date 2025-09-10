@@ -10,9 +10,13 @@ pub mod geometry;
 pub mod scale;
 pub mod view;
 pub mod theme;
+pub mod text;
+pub mod downsample;
 
 pub use chart::{Chart, RenderOptions};
 pub use series::{Series, SeriesType};
 pub use axis::Axis;
 pub use view::ViewState;
 pub use theme::Theme;
+pub use text::TextShaper;
+pub use downsample::{lttb, aggregate_ohlc_buckets};

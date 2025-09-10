@@ -9,7 +9,9 @@ use crate::series::{Series, SeriesType};
 use crate::types::{Insets, WIDTH, HEIGHT};
 use crate::Axis;
 use crate::theme::Theme;
+use crate::axis::ScaleKind;
 use crate::scale::{TimeScale, ValueScale};
+use crate::text::TextShaper;
 // For time-aware axis formatting
 
 
@@ -21,8 +23,10 @@ pub struct RenderOptions {
     pub background: skia::Color,
     pub theme: Theme,
     pub draw_labels: bool,   // draw axis labels (set false for deterministic tests)
+    pub show_tooltip: bool,  // when crosshair is present, render hover tooltip
     pub crisp_lines: bool,   // align 1px lines to half-pixels for sharpness
     pub crosshair: Option<(f32, f32)>, // device px; when Some, draw crosshair overlay
+    pub dpr: f32,            // device pixel ratio for HiDPI (1.0 default)
 }
 
 impl Default for RenderOptions {
@@ -34,8 +38,10 @@ impl Default for RenderOptions {
             background: skia::Color::from_argb(255, 18, 18, 20), // kept for backwards-compat; unused if theme provided
             theme: Theme::dark(),
             draw_labels: true,
+            show_tooltip: false,
             crisp_lines: true,
             crosshair: None,
+            dpr: 1.0,
         }
     }
 }
@@ -117,6 +123,12 @@ impl Chart {
         Ok(())
     }
 
+    /// Draw the chart onto an existing Skia canvas (CPU or GPU).
+    /// The caller is responsible for canvas lifecycle and presentation.
+    pub fn draw_onto_canvas(&self, canvas: &skia::Canvas, opts: &RenderOptions) {
+        self.draw_into(canvas, opts);
+    }
+
     /// Render the chart and return PNG-encoded bytes (headless).
     pub fn render_to_png_bytes(&self, opts: &RenderOptions) -> Result<Vec<u8>> {
         let mut surface = skia::surfaces::raster_n32_premul((opts.width, opts.height))
@@ -177,6 +189,7 @@ impl Chart {
             opts.draw_labels,
             opts.crisp_lines,
             &opts.theme,
+            opts.dpr,
         );
 
         // Series
@@ -213,6 +226,17 @@ impl Chart {
             canvas.draw_line((plot_left as f32, iy), (plot_right as f32, iy), &paint);
             // vertical
             canvas.draw_line((ix, plot_top as f32), (ix, plot_bottom as f32), &paint);
+
+            if opts.show_tooltip {
+                draw_tooltip(
+                    canvas,
+                    plot_left, plot_top, plot_right, plot_bottom,
+                    &self.x_axis, &self.y_axis,
+                    &self.series,
+                    ix, iy,
+                    opts,
+                );
+            }
         }
     }
 }
@@ -248,6 +272,7 @@ fn draw_axes(
     draw_labels: bool,
     crisp: bool,
     theme: &Theme,
+    dpr: f32,
 ) {
     let mut axis_paint = skia::Paint::default();
     axis_paint.set_color(theme.axis_line);
@@ -264,11 +289,12 @@ fn draw_axes(
         let mut paint_text = skia::Paint::default();
         paint_text.set_color(theme.axis_label);
         paint_text.set_anti_alias(true);
-        let mut font = choose_font(12.0);
+        let text_size = 12.0 * dpr.max(0.5);
+        let shaper = TextShaper::new();
 
         // Draw axis titles
-        canvas.draw_str(&x.label, (r as f32 - 80.0, b as f32 + 28.0), &font, &paint_text);
-        canvas.draw_str(&y.label, (l as f32 + 8.0, t as f32 + 14.0), &font, &paint_text);
+        shaper.draw_left(canvas, &x.label, r as f32 - 80.0 * dpr, b as f32 + 28.0 * dpr, text_size, theme.axis_label, false);
+        shaper.draw_left(canvas, &y.label, l as f32 + 8.0 * dpr, t as f32 + 14.0 * dpr, text_size, theme.axis_label, false);
 
         // Ticks configuration
         let target_xticks = 8usize;
@@ -276,12 +302,19 @@ fn draw_axes(
 
         // Compute "nice" ticks in value space
         let xticks = nice_ticks(x.min, x.max, target_xticks.max(2));
-        let yticks = nice_ticks(y.min, y.max, target_yticks.max(2));
+        let yticks = if y.kind == ScaleKind::Log10 {
+            log_ticks(y.min.max(1e-12), y.max, target_yticks.max(2))
+        } else {
+            nice_ticks(y.min, y.max, target_yticks.max(2))
+        };
 
         // Build scales to place ticks in pixel space
         let xspan = (x.max - x.min).max(1e-9);
         let ts = TimeScale::new(l as f32, x.min, ((r - l) as f32) / (xspan as f32));
-        let vs = ValueScale::new(t as f32, b as f32, y.min, y.max);
+        let vs = match y.kind {
+            ScaleKind::Linear => ValueScale::new_linear(t as f32, b as f32, y.min, y.max),
+            ScaleKind::Log10 => ValueScale::new_log10(t as f32, b as f32, y.min, y.max),
+        };
 
         let sx = |vx: f64| -> f32 { ts.to_px(vx) };
         let sy = |vy: f64| -> f32 { vs.to_px(vy) };
@@ -297,7 +330,7 @@ fn draw_axes(
             if !vx.is_finite() { continue; }
             let xpx = if crisp { align_half(sx(vx)) } else { sx(vx) };
             // small tick up from baseline
-            canvas.draw_line((xpx, bx), (xpx, bx - 6.0), &tick_paint);
+            canvas.draw_line((xpx, bx), (xpx, bx - 6.0 * dpr), &tick_paint);
             // label
             let label = if detect_time_like(x.min, x.max).is_some() {
                 format_time_tick(vx, x.min, x.max)
@@ -305,8 +338,8 @@ fn draw_axes(
                 format_tick(vx, x.min, x.max)
             };
             // center roughly: shift by half label width
-            let advance = font.measure_str(&label, Some(&paint_text)).0;
-            canvas.draw_str(label, (xpx - advance * 0.5, b as f32 + 18.0), &font, &paint_text);
+            let advance = shaper.measure_width(&label, text_size, true);
+            shaper.draw_left(canvas, &label, xpx - advance * 0.5, b as f32 + 18.0 * dpr, text_size, theme.axis_label, true);
         }
 
         // Y ticks and labels (left)
@@ -314,11 +347,32 @@ fn draw_axes(
             if !vy.is_finite() { continue; }
             let ypx = if crisp { align_half(sy(vy)) } else { sy(vy) };
             // small tick to the right from axis
-            canvas.draw_line((lx, ypx), (lx + 6.0, ypx), &tick_paint);
+            canvas.draw_line((lx, ypx), (lx + 6.0 * dpr, ypx), &tick_paint);
             // label to the left of axis, right-aligned
-            let label = format_tick(vy, y.min, y.max);
-            let advance = font.measure_str(&label, Some(&paint_text)).0;
-            canvas.draw_str(label, (l as f32 - 8.0 - advance, ypx + 4.0), &font, &paint_text);
+            let label = if y.kind == ScaleKind::Log10 { format_log_tick(vy) } else { format_tick(vy, y.min, y.max) };
+            let advance = shaper.measure_width(&label, text_size, true);
+            shaper.draw_left(canvas, &label, l as f32 - 8.0 * dpr - advance, ypx + 4.0 * dpr, text_size, theme.axis_label, true);
+        }
+
+        // Minor ticks (no labels)
+        let mut minor_paint = tick_paint.clone();
+        minor_paint.set_color(skia::Color::from_argb(180, 120, 120, 130));
+        minor_paint.set_stroke_width(0.8);
+
+        // X minor ticks (linear only, between majors)
+        let x_minors = minor_ticks_linear(&xticks, 4);
+        for vx in x_minors {
+            if !vx.is_finite() { continue; }
+            let xpx = if crisp { align_half(sx(vx)) } else { sx(vx) };
+            canvas.draw_line((xpx, bx), (xpx, bx - 3.0), &minor_paint);
+        }
+        // Y minor ticks (linear: subdiv; log: 2..9 per decade)
+        if y.kind == ScaleKind::Log10 {
+            let y_minors = minor_ticks_log(y.min.max(1e-12), y.max);
+            for vy in y_minors { let ypx = if crisp { align_half(sy(vy)) } else { sy(vy) }; canvas.draw_line((lx, ypx), (lx + 3.0, ypx), &minor_paint); }
+        } else {
+            let y_minors = minor_ticks_linear(&yticks, 4);
+            for vy in y_minors { let ypx = if crisp { align_half(sy(vy)) } else { sy(vy) }; canvas.draw_line((lx, ypx), (lx + 3.0, ypx), &minor_paint); }
         }
     }
 }
@@ -342,7 +396,10 @@ fn draw_line_series(
     // Scale helpers via TimeScale/ValueScale
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
     let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
-    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let vs = match y_axis.kind {
+        ScaleKind::Linear => ValueScale::new_linear(t as f32, b as f32, y_axis.min, y_axis.max),
+        ScaleKind::Log10 => ValueScale::new_log10(t as f32, b as f32, y_axis.min, y_axis.max),
+    };
     let sx = |x: f64| -> f32 { ts.to_px(x) };
     let sy = |y: f64| -> f32 { vs.to_px(y) };
 
@@ -374,19 +431,34 @@ fn draw_candle_series(
 
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
     let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
-    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let vs = match y_axis.kind {
+        ScaleKind::Linear => ValueScale::new_linear(t as f32, b as f32, y_axis.min, y_axis.max),
+        ScaleKind::Log10 => ValueScale::new_log10(t as f32, b as f32, y_axis.min, y_axis.max),
+    };
     let sx = |x: f64| -> f32 { ts.to_px(x) };
     let sy = |y: f64| -> f32 { vs.to_px(y) };
 
     // style
-    let mut wick = skia::Paint::default();
-    wick.set_anti_alias(true);
-    wick.set_style(skia::paint::Style::Stroke);
-    wick.set_stroke_width(1.0);
+    let mut wick_paint = skia::Paint::default();
+    wick_paint.set_anti_alias(true);
+    wick_paint.set_style(skia::paint::Style::Stroke);
+    wick_paint.set_stroke_width(1.0);
 
-    let mut body = skia::Paint::default();
-    body.set_anti_alias(true);
-    body.set_style(skia::paint::Style::Fill);
+    let mut body_paint_up = skia::Paint::default();
+    body_paint_up.set_anti_alias(true);
+    body_paint_up.set_style(skia::paint::Style::Fill);
+    body_paint_up.set_color(theme.candle_up);
+
+    let mut body_paint_down = skia::Paint::default();
+    body_paint_down.set_anti_alias(true);
+    body_paint_down.set_style(skia::paint::Style::Fill);
+    body_paint_down.set_color(theme.candle_down);
+
+    // Batching: build combined paths for wicks and bodies (up/down)
+    let mut wick_path_up = skia::Path::new();
+    let mut wick_path_down = skia::Path::new();
+    let mut body_path_up = skia::Path::new();
+    let mut body_path_down = skia::Path::new();
 
     // body width in pixels (roughly one “bar width” as fraction of plot)
     let n = series.data_ohlc.len() as f32;
@@ -400,21 +472,36 @@ fn draw_candle_series(
         let y_c = sy(c.c);
 
         let up = c.c >= c.o;
-        let color = if up { theme.candle_up } else { theme.candle_down };
+        // wick into path
+        if up {
+            wick_path_up.move_to((x, y_h));
+            wick_path_up.line_to((x, y_l));
+        } else {
+            wick_path_down.move_to((x, y_h));
+            wick_path_down.line_to((x, y_l));
+        }
 
-        wick.set_color(color);
-        body.set_color(color);
-
-        // wick
-        canvas.draw_line((x, y_h), (x, y_l), &wick);
-
-        // body rect
+        // body rect into path
         let half = bar_px * 0.5;
         let top = y_o.min(y_c);
         let bot = y_o.max(y_c);
         let rect = skia::Rect::from_ltrb(x - half, top, x + half, bot.max(top + 1.0));
-        canvas.draw_rect(rect, &body);
+        if up {
+            body_path_up.add_rect(rect, None);
+        } else {
+            body_path_down.add_rect(rect, None);
+        }
     }
+
+    // stroke wicks by color
+    wick_paint.set_color(theme.candle_up);
+    canvas.draw_path(&wick_path_up, &wick_paint);
+    wick_paint.set_color(theme.candle_down);
+    canvas.draw_path(&wick_path_down, &wick_paint);
+
+    // fill bodies by color
+    canvas.draw_path(&body_path_up, &body_paint_up);
+    canvas.draw_path(&body_path_down, &body_paint_down);
 }
 
 #[inline]
@@ -474,8 +561,33 @@ fn nice_step(raw: f64) -> f64 {
     nice * base
 }
 
+fn log_ticks(min: f64, max: f64, target: usize) -> Vec<f64> {
+    if min <= 0.0 || !min.is_finite() || !max.is_finite() || target < 2 { return vec![]; }
+    let start = min.log10().floor() as i32;
+    let end = max.log10().ceil() as i32;
+    let mut out = Vec::new();
+    for k in start..=end {
+        out.push(10f64.powi(k));
+    }
+    out
+}
+
+fn format_log_tick(v: f64) -> String {
+    if v.abs() >= 1.0 {
+        format!("{:.0}", v)
+    } else {
+        // scientific for small values
+        let exp = v.abs().log10().floor() as i32;
+        format!("1e{}", exp)
+    }
+}
+
 fn format_tick(v: f64, min: f64, max: f64) -> String {
     let span = (max - min).abs().max(1e-12);
+    // Use SI prefixes for large spans
+    if span >= 1e6 {
+        return format_si(v);
+    }
     let mag = span.abs().log10();
     let decimals = if mag >= 6.0 { 0 } else if mag >= 3.0 { 1 } else if mag >= 1.0 { 2 } else { 3 };
     format!("{:.*}", decimals as usize, v)
@@ -519,12 +631,52 @@ fn format_time_tick(v: f64, min: f64, max: f64) -> String {
         "%Y-%m-%d"
     };
     let secs_i = if secs.is_finite() { secs.floor() as i64 } else { 0 };
-    if let Some(dt) = chrono::NaiveDateTime::from_timestamp_opt(secs_i, 0) {
+    if let Some(dt) = chrono::DateTime::<chrono::Utc>::from_timestamp(secs_i, 0) {
         dt.format(fmt).to_string()
     } else {
         // Fallback to numeric
         format_tick(v, min, max)
     }
+}
+
+fn minor_ticks_linear(majors: &[f64], n: usize) -> Vec<f64> {
+    if majors.len() < 2 || n == 0 { return vec![]; }
+    let mut out = Vec::new();
+    for w in majors.windows(2) {
+        let a = w[0]; let b = w[1];
+        let step = (b - a) / (n as f64 + 1.0);
+        for i in 1..=n {
+            out.push(a + step * (i as f64));
+        }
+    }
+    out
+}
+
+fn minor_ticks_log(min: f64, max: f64) -> Vec<f64> {
+    if min <= 0.0 { return vec![]; }
+    let start = min.log10().floor() as i32;
+    let end = max.log10().ceil() as i32;
+    let mut out = Vec::new();
+    for k in start..=end {
+        let base = 10f64.powi(k);
+        for m in 2..10 { // 2..=9
+            let v = base * (m as f64);
+            if v >= min && v <= max { out.push(v); }
+        }
+    }
+    out
+}
+
+fn format_si(v: f64) -> String {
+    let av = v.abs();
+    let (unit, div) = if av >= 1e12 { ("T", 1e12) }
+        else if av >= 1e9 { ("B", 1e9) }
+        else if av >= 1e6 { ("M", 1e6) }
+        else if av >= 1e3 { ("K", 1e3) }
+        else { ("", 1.0) };
+    if unit.is_empty() { return format!("{:.2}", v); }
+    let val = v / div;
+    if av >= 1e9 { format!("{:.2}{}", val, unit) } else { format!("{:.1}{}", val, unit) }
 }
 
 fn draw_bar_series(
@@ -538,7 +690,10 @@ fn draw_bar_series(
 
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
     let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
-    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let vs = match y_axis.kind {
+        ScaleKind::Linear => ValueScale::new_linear(t as f32, b as f32, y_axis.min, y_axis.max),
+        ScaleKind::Log10 => ValueScale::new_log10(t as f32, b as f32, y_axis.min, y_axis.max),
+    };
     let sx = |x: f64| -> f32 { ts.to_px(x) };
     let sy = |y: f64| -> f32 { vs.to_px(y) };
 
@@ -546,6 +701,10 @@ fn draw_bar_series(
     stroke.set_anti_alias(true);
     stroke.set_style(skia::paint::Style::Stroke);
     stroke.set_stroke_width(1.0);
+
+    // Batch into two paths by up/down color
+    let mut path_up = skia::Path::new();
+    let mut path_down = skia::Path::new();
 
     // tick width ~ 40% of bar slot width
     let n = series.data_ohlc.len() as f32;
@@ -560,16 +719,21 @@ fn draw_bar_series(
         let y_c = sy(c.c);
 
         let up = c.c >= c.o;
-        let color = if up { theme.candle_up } else { theme.candle_down };
-        stroke.set_color(color);
-
-        // main stem
-        canvas.draw_line((x, y_h), (x, y_l), &stroke);
-        // open tick to the left
-        canvas.draw_line((x - tick * 0.5, y_o), (x, y_o), &stroke);
-        // close tick to the right
-        canvas.draw_line((x, y_c), (x + tick * 0.5, y_c), &stroke);
+        if up {
+            path_up.move_to((x, y_h)); path_up.line_to((x, y_l));
+            path_up.move_to((x - tick * 0.5, y_o)); path_up.line_to((x, y_o));
+            path_up.move_to((x, y_c)); path_up.line_to((x + tick * 0.5, y_c));
+        } else {
+            path_down.move_to((x, y_h)); path_down.line_to((x, y_l));
+            path_down.move_to((x - tick * 0.5, y_o)); path_down.line_to((x, y_o));
+            path_down.move_to((x, y_c)); path_down.line_to((x + tick * 0.5, y_c));
+        }
     }
+
+    stroke.set_color(theme.candle_up);
+    canvas.draw_path(&path_up, &stroke);
+    stroke.set_color(theme.candle_down);
+    canvas.draw_path(&path_down, &stroke);
 }
 
 fn draw_histogram_series(
@@ -584,7 +748,10 @@ fn draw_histogram_series(
 
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
     let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
-    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let vs = match y_axis.kind {
+        ScaleKind::Linear => ValueScale::new_linear(t as f32, b as f32, y_axis.min, y_axis.max),
+        ScaleKind::Log10 => ValueScale::new_log10(t as f32, b as f32, y_axis.min, y_axis.max),
+    };
     let sx = |x: f64| -> f32 { ts.to_px(x) };
     let sy = |y: f64| -> f32 { vs.to_px(y) };
 
@@ -605,6 +772,8 @@ fn draw_histogram_series(
     fill.set_style(skia::paint::Style::Fill);
     fill.set_color(theme.histogram);
 
+    // Batch: accumulate rects into a single path
+    let mut path = skia::Path::new();
     for &(xv, yv) in data {
         let x = sx(xv);
         let y = sy(yv);
@@ -612,8 +781,9 @@ fn draw_histogram_series(
         let top = y.min(y0);
         let bot = y.max(y0);
         let rect = skia::Rect::from_ltrb(x - half, top, x + half, (bot).max(top + 1.0));
-        canvas.draw_rect(rect, &fill);
+        path.add_rect(rect, None);
     }
+    canvas.draw_path(&path, &fill);
 }
 
 fn draw_baseline_series(
@@ -628,7 +798,10 @@ fn draw_baseline_series(
 
     let xspan = (x_axis.max - x_axis.min).max(1e-9);
     let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
-    let vs = ValueScale::new(t as f32, b as f32, y_axis.min, y_axis.max);
+    let vs = match y_axis.kind {
+        ScaleKind::Linear => ValueScale::new_linear(t as f32, b as f32, y_axis.min, y_axis.max),
+        ScaleKind::Log10 => ValueScale::new_log10(t as f32, b as f32, y_axis.min, y_axis.max),
+    };
     let sx = |x: f64| -> f32 { ts.to_px(x) };
     let sy = |y: f64| -> f32 { vs.to_px(y) };
 
@@ -663,4 +836,112 @@ fn draw_baseline_series(
     stroke.set_stroke_width(2.0);
     stroke.set_color(theme.baseline_stroke);
     canvas.draw_path(&path, &stroke);
+}
+
+fn draw_tooltip(
+    canvas: &skia::Canvas,
+    l: i32, t: i32, r: i32, b: i32,
+    x_axis: &Axis, y_axis: &Axis,
+    series_list: &[Series],
+    cx: f32, cy: f32,
+    opts: &RenderOptions,
+) {
+    if series_list.is_empty() { return; }
+
+    // Build scales to translate between px and data
+    let xspan = (x_axis.max - x_axis.min).max(1e-9);
+    let ts = TimeScale::new(l as f32, x_axis.min, ((r - l) as f32) / (xspan as f32));
+    let vs = match y_axis.kind {
+        ScaleKind::Linear => ValueScale::new_linear(t as f32, b as f32, y_axis.min, y_axis.max),
+        ScaleKind::Log10 => ValueScale::new_log10(t as f32, b as f32, y_axis.min, y_axis.max),
+    };
+    let to_logical = |px: f32| -> f64 { ts.from_px(px) };
+    let to_px_y = |v: f64| -> f32 { vs.to_px(v) };
+
+    let xq = to_logical(cx);
+
+    // For now, tooltip is based on the first series (window demo shows one per chart)
+    let s = &series_list[0];
+    let mut lines: Vec<String> = Vec::new();
+
+    let title = if let Some(_) = detect_time_like(x_axis.min, x_axis.max) {
+        format!("x {}", format_time_tick(xq, x_axis.min, x_axis.max))
+    } else {
+        format!("x {}", format_tick(xq, x_axis.min, x_axis.max))
+    };
+    lines.push(title);
+
+    match s.series_type {
+        SeriesType::Line | SeriesType::Histogram | SeriesType::Baseline => {
+            if let Some((_, &(xv, yv))) = s.data_xy.iter().enumerate()
+                .min_by(|a, b| (a.1 .0 - xq).abs().partial_cmp(&(b.1 .0 - xq).abs()).unwrap_or(std::cmp::Ordering::Equal))
+            {
+                lines.push(format!("y {}", format_tick(yv, y_axis.min, y_axis.max)));
+                let ypx = to_px_y(yv);
+                // Small marker to highlight nearest point
+                let mut p = skia::Paint::default();
+                p.set_anti_alias(true);
+                p.set_style(skia::paint::Style::Fill);
+                p.set_color(opts.theme.line_stroke);
+                canvas.draw_circle((ts.to_px(xv), ypx), 3.0, &p);
+            }
+        }
+        SeriesType::Candlestick | SeriesType::Bar => {
+            if let Some(c) = s.data_ohlc.iter()
+                .min_by(|a, b| (a.t - xq).abs().partial_cmp(&(b.t - xq).abs()).unwrap_or(std::cmp::Ordering::Equal))
+            {
+                lines.push(format!("O {}", format_tick(c.o, y_axis.min, y_axis.max)));
+                lines.push(format!("H {}", format_tick(c.h, y_axis.min, y_axis.max)));
+                lines.push(format!("L {}", format_tick(c.l, y_axis.min, y_axis.max)));
+                lines.push(format!("C {}", format_tick(c.c, y_axis.min, y_axis.max)));
+            }
+        }
+    }
+
+    // Compose tooltip box near cursor
+    let mut paint_text = skia::Paint::default();
+    paint_text.set_color(opts.theme.axis_label);
+    paint_text.set_anti_alias(true);
+    let text_size = 12.0 * opts.dpr.max(0.5);
+    let shaper = TextShaper::new();
+
+    let padding = 6.0_f32 * opts.dpr.max(0.5);
+    let mut w = 0f32;
+    let mut h = padding; // top padding
+    for line in &lines {
+        let adv = shaper.measure_width(line, text_size, true);
+        w = w.max(adv);
+        h += 14.0 * opts.dpr; // approx line height scaled
+    }
+    w += padding * 2.0; h += padding; // bottom padding
+
+    // Position tooltip to avoid clipping
+    let mut bx = cx + 10.0 * opts.dpr;
+    let mut by = cy + 10.0 * opts.dpr;
+    if bx + w > r as f32 - 2.0 { bx = (cx - 10.0 * opts.dpr - w).max(l as f32 + 2.0); }
+    if by + h > b as f32 - 2.0 { by = (cy - 10.0 * opts.dpr - h).max(t as f32 + 2.0); }
+
+    // Background box
+    let rect = skia::Rect::from_xywh(bx, by, w, h);
+    let mut bg = skia::Paint::default();
+    // Slightly translucent contrasting background (based on theme name)
+    let dark = opts.theme.name == "dark";
+    let bg_col = if dark { skia::Color::from_argb(200, 32, 32, 36) } else { skia::Color::from_argb(220, 240, 240, 244) };
+    bg.set_color(bg_col);
+    bg.set_anti_alias(true);
+    canvas.draw_rect(rect, &bg);
+
+    // Border
+    let mut border = skia::Paint::default();
+    border.set_style(skia::paint::Style::Stroke);
+    border.set_color(opts.theme.axis_line);
+    border.set_stroke_width(1.0);
+    canvas.draw_rect(rect, &border);
+
+    // Text lines
+    let mut y = by + padding + 12.0 * opts.dpr;
+    for line in &lines {
+        shaper.draw_left(canvas, line, bx + padding, y, text_size, opts.theme.axis_label, true);
+        y += 14.0 * opts.dpr;
+    }
 }

@@ -4,7 +4,7 @@
 use crate::{Chart};
 use crate::series::SeriesType;
 use crate::types::Insets;
-use crate::scale::{TimeScale, ValueScale};
+// Removed unused imports to tidy warnings
 
 #[derive(Clone, Copy, Debug)]
 pub struct ViewState {
@@ -70,8 +70,8 @@ impl ViewState {
 
     pub fn zoom_at_pixel(&mut self, scroll: f64, cursor_x: f64, cursor_y: f64, width: i32, height: i32, insets: &Insets) {
         let w = width as f64; let h = height as f64;
-        let l = insets.left as f64; let rpx = (w - insets.right as f64);
-        let t = insets.top as f64; let bpx = (h - insets.bottom as f64);
+        let l = insets.left as f64; let rpx = w - insets.right as f64;
+        let t = insets.top as f64; let bpx = h - insets.bottom as f64;
         let plot_w = (rpx - l).max(1.0); let plot_h = (bpx - t).max(1.0);
         let cx = cursor_x.clamp(l, rpx); let cy = cursor_y.clamp(t, bpx);
         let x_span = self.x_max - self.x_min; let y_span = self.y_max - self.y_min;
@@ -123,4 +123,3 @@ pub fn visible_y_range(chart: &Chart, x_min: f64, x_max: f64) -> Option<(f64, f6
     }
     if any { Some((y_min, y_max)) } else { None }
 }
-

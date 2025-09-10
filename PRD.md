@@ -19,7 +19,7 @@
 | **Text Rendering**             | Browser font stack; Canvas2D measureText (imprecise) | Skia text shaping & metrics; kerning, tabular numbers, subpixel AA                                 |
 | **Plugin / Extensibility**     | Limited (overlays via app code, no plugin API)       | Formal plugin system: overlays, indicators, annotations, custom drawing                            |
 | **Testing**                    | Visual/manual regression tests                       | Golden snapshot tests (Skia CPU → PNG), unit tests, property tests                                 |
-| **Color / Theme**              | CSS colors, alpha fills, gradients                   | Rust `Color` type; sRGB pipeline; theming system planned (dark/light/custom)                       |
+| **Color / Theme**              | CSS colors, alpha fills, gradients                   | Rust `Color` type; sRGB pipeline; theming presets available (dark/light/solarized/high-contrast); custom themes planned |
 | **Performance**                | Smooth up to \~50k–100k points, drops beyond         | Target: 100k–1M points @ 60 FPS (native GPU batching)                                              |
 | **Export**                     | Screenshots via browser                              | PNG/SVG export via Skia surfaces (headless render)                                                 |
 | **Dependencies**               | JS runtime + browser DOM                             | Pure Rust binary; Skia via `skia-safe`; no JS runtime                                              |
@@ -168,7 +168,7 @@ Last updated: 2025-09-10
 
 - Parity Layer:
   - [x] Pan & zoom (windowed demo: mouse wheel zoom, drag pan).
-  - [~] Crosshair (windowed demo: crosshair lines at cursor; tooltips pending).
+  - [x] Crosshair + tooltips (windowed demo: crosshair lines and hover tooltip near cursor).
   - [x] Autoscale axes: full extents (A) and Y-only to visible X-range (Y).
 - [x] Multiple series types: Line, Candlestick, Bar, Histogram, Baseline implemented (see `crates/chart-core/src/series.rs:1`, `crates/chart-core/src/chart.rs:1`).
   - [x] Light/dark theming (default: dark; light available; toggle with 'T' in window demo).
@@ -177,18 +177,20 @@ Last updated: 2025-09-10
   - [x] Time tick formatting heuristics for epoch seconds/millis using `chrono` (see `crates/chart-core/src/chart.rs:1`).
 
 - Differentiation:
-  - [ ] GPU batching & downsampling (not started).
+  - [~] Downsampling: LTTB for XY series and OHLC bucket aggregation utilities added (opt-in; used in demo for large inputs).
+  - [x] CPU batching: grouped path rendering for candlesticks/bars/histogram reduces draw calls significantly.
+  - [x] GPU rendering (OpenGL): feature-gated window demo path with Skia GPU surfaces; CSV-backed charts with pan/zoom, crosshair + tooltips, theme (T), downsampling (D). CPU remains default; GPU optional.
   - [ ] High‑fidelity text shaping/metrics (not started).
   - [ ] Formal plugin system (scaffold crate exists, API not defined).
   - [~] Export: PNG implemented; SVG pending (see `crates/chart-core/src/chart.rs:1`).
   - [x] Pure Rust, no JS runtime.
 
 - Stretch:
-  - [ ] Logarithmic scale (not started).
-  - [ ] Theming system (not started).
-  - [ ] Advanced axis formatting (not started).
+  - [x] Logarithmic scale (Y-axis): implemented with tick marks at powers of 10; toggle in windowed demo (L). Linear remains default.
+  - [x] Theming system: multiple presets (dark, light, solarized-dark/light, high-contrast); cycle with T in windowed demos; title shows theme.
+  - [x] Advanced axis formatting: SI-prefixed numeric labels (K, M, B) and minor ticks (linear subdivisions and log 2–9 per decade) on axes.
   - [ ] WASM/Web fallback demo (not started).
-  - [ ] HiDPI optimizations (not started).
+  - [~] HiDPI optimizations: DPR-aware text and tick sizes; tooltip padding/spacing scale with device pixel ratio; 1px crisping retained. Further polish: font metric consistency and image assets.
 
 - Adoption & Ecosystem:
   - [x] Windowed demo (winit + softbuffer) with pan/zoom/crosshair (see `crates/window-demo/src/main.rs:1`).
@@ -200,8 +202,49 @@ Last updated: 2025-09-10
   - [ ] Docs/examples/plugins (examples stub only; see `crates/chart-examples/src/bin/lines.rs:1`).
 
 Notes:
-- Generated PNGs found under `target/out/` confirm end‑to‑end render (see `target/out/chart.png:1`).
+- Generated PNGs found under `target/out/` confirm end-to-end render (see `target/out/chart.png:1`).
 - Minor housekeeping: a test placeholder resides at `crates/chart-core/src/rendering.rs:1` and likely belongs under `tests/`.
+- Maintenance: Upgraded Skia GL usage to modern APIs (direct_contexts, backend_render_targets, surfaces) and tidied warnings; default builds are clean.
+
+---
+
+## Progress Addendum: Runtime UX (Window Demo)
+
+- Theme toggle: press `T` to switch light/dark (dark default).
+- Downsampling toggle: press `D` to enable/disable LTTB/bucket aggregation based on window width.
+- Autoscale: `A` resets to full extents; `Y` autoscale Y over current visible X range.
+- CSV input handling: both CPU and GPU demos ignore option-like args and fall back to sample CSVs in repo root (`CRVUSDT_6h.csv`, `BTCUSDT_1m_100.csv`, `ETHUSDT_1m_500.csv`) when a path isn’t provided.
+
+---
+
+## Progress Addendum: GPU Demo (OpenGL)
+
+- Feature-gated GPU demo: `constellation-window-demo` supports an OpenGL path when built with `--features gpu-gl-demo` and launched with `--gpu`.
+  - Example: `cargo run -p constellation-window-demo --features gpu-gl-demo -- --gpu`
+- Data: Loads the same CSV OHLC input and renders Candlesticks, Bars, Histogram (close-open), and Baseline (close vs avg) using Skia GPU surfaces.
+- Interactions: Crosshair + tooltips, pan (left-drag), zoom (mouse wheel), autoscale (A), Y-autoscale visible (Y).
+- Toggles: Theme (T) light/dark, downsampling (D) on/off; window title reflects current theme and DS status.
+- Resize: Recreates the GPU render target at new size and reapplies downsampling for width-based target points.
+- Safety: CPU remains the default; GPU demo is optional and isolated behind a feature flag.
+
+---
+
+## How To Run (Demos)
+
+- CPU demo:
+  - Command: `cargo run -p constellation-window-demo`
+- GPU demo (OpenGL, feature-gated):
+  - Command: `cargo run -p constellation-window-demo --features gpu-gl-demo -- --gpu`
+- CSV input:
+  - Pass a CSV path as the first non-option arg, or place a sample in repo root: `CRVUSDT_6h.csv`, `BTCUSDT_1m_100.csv`, `ETHUSDT_1m_500.csv`.
+- Controls (CPU & GPU):
+  - Series: `1`..`4`
+  - Autoscale: `A` (full), `Y` (Y-only visible range)
+  - Downsampling: `D` (toggle)
+  - Theme: `T` (cycle presets)
+  - Scale: `L` (toggle linear/log Y)
+  - Mouse: crosshair/tooltip on move, wheel zoom at cursor, left-drag pan
+  - Exit: `Esc`
 
 ```
 constellation-chart/

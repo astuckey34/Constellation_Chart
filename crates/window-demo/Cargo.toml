@@ -5,7 +5,22 @@ edition = "2021"
 
 [dependencies]
 chart-core = { path = "../chart-core" }
+chart-render-skia = { path = "../chart-render-skia" }
 anyhow = { workspace = true }
 csv = { workspace = true }
 winit = "0.28"
 softbuffer = "0.3"
+glutin = { version = "0.30.10", optional = true }
+glutin-winit = { version = "0.3.0", optional = true }
+raw-window-handle = { version = "0.5", optional = true }
+skia-safe = { workspace = true, optional = true, features = ["gl"] }
+
+[features]
+default = []
+gpu-gl-demo = [
+  "chart-render-skia/gpu-gl",
+  "dep:glutin",
+  "dep:glutin-winit",
+  "dep:raw-window-handle",
+  "dep:skia-safe",
+]

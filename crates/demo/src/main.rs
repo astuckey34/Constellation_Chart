@@ -33,11 +33,16 @@ fn main() -> Result<()> {
 
     let opts = RenderOptions::default();
 
+    // Optional downsampling/aggregation for large datasets
+    let target_points = 1500usize;
+    let bucket = if n > target_points { ((n as f64) / (target_points as f64)).ceil() as usize } else { 1 };
+
     // 1) Candlesticks
     let mut chart_c = Chart::new();
     chart_c.x_axis = Axis::new("Time (index/epoch)", 0.0, (n - 1) as f64);
     chart_c.y_axis = Axis::new("Price", min_p, max_p * 1.02);
-    chart_c.add_series(Series::from_candles(candles.clone()));
+    let series_c = Series::from_candles(candles.clone()).aggregate_ohlc(bucket);
+    chart_c.add_series(series_c);
     let out_c = out_name_with(&path, "candles");
     chart_c.render_to_png(&opts, &out_c)?;
     println!("Wrote {}", out_c.display());
@@ -46,22 +51,24 @@ fn main() -> Result<()> {
     let mut chart_bars = Chart::new();
     chart_bars.x_axis = Axis::new("Time (index/epoch)", 0.0, (n - 1) as f64);
     chart_bars.y_axis = Axis::new("Price", min_p, max_p * 1.02);
-    chart_bars.add_series(Series::from_candles_as(SeriesType::Bar, candles.clone()));
+    chart_bars.add_series(Series::from_candles_as(SeriesType::Bar, candles.clone()).aggregate_ohlc(bucket));
     let out_bars = out_name_with(&path, "bars");
     chart_bars.render_to_png(&opts, &out_bars)?;
     println!("Wrote {}", out_bars.display());
 
     // Prepare derived series for Histogram and Baseline
-    let xy_diff: Vec<(f64, f64)> = candles
+    let xy_diff_full: Vec<(f64, f64)> = candles
         .iter()
         .enumerate()
         .map(|(i, c)| (i as f64, c.c - c.o))
         .collect();
-    let xy_close: Vec<(f64, f64)> = candles
+    let xy_diff = if n > target_points { chart_core::lttb(&xy_diff_full, target_points) } else { xy_diff_full };
+    let xy_close_full: Vec<(f64, f64)> = candles
         .iter()
         .enumerate()
         .map(|(i, c)| (i as f64, c.c))
         .collect();
+    let xy_close = if n > target_points { chart_core::lttb(&xy_close_full, target_points) } else { xy_close_full };
 
     // 3) Histogram of close-open relative to baseline 0.0
     let (min_h, max_h) = minmax_xy(&xy_diff);
@@ -235,4 +242,3 @@ fn minmax_xy(v: &[(f64, f64)]) -> (f64, f64) {
     }
     (min_v, max_v)
 }
-
