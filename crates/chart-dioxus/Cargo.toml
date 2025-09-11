@@ -8,3 +8,16 @@ edition = "2021"
 [dependencies]
 chart-core = { path = "../chart-core" }
 
+# Dioxus UI dependencies are optional and only compiled when the
+# "desktop" feature is enabled. This keeps the workspace build
+# independent of fetching UI crates until needed.
+dioxus = { version = "0.6", optional = true }
+dioxus-desktop = { version = "0.6", optional = true }
+base64 = { version = "0.22", optional = true }
+softbuffer = { version = "0.4", optional = true }
+
+[features]
+default = []
+# Enable to build desktop UI scaffolding (ChartCanvas component and demo launcher)
+desktop = ["dep:dioxus", "dep:dioxus-desktop", "dep:base64", "dep:softbuffer"]
+

@@ -1,91 +1,205 @@
-# Expert Architecture & Guidance (Consultant Addendum)
+# Constellation Chart — Consultant Addendum
 
-This addendum codifies a TradingView-grade architecture and delivery plan tailored to a native Rust stack (Dioxus UI, Skia renderer, optional Tauri shell). It emphasizes maintainability, performance, deterministic rendering, and extensibility.
+This document captures the consulting plan to evolve Constellation Chart into a TradingView‑grade, desktop‑only charting engine using Rust + Dioxus (no Tauri). It consolidates architecture guidance, design principles, UX standards, and practical next steps mapped to the current codebase.
 
-## Architecture Blueprint
-- Model: Series (Line/Area/Candles/Bar/Histogram/Baseline), axes/scales, autoscale logic. Pure data; no UI state.
-- ViewState: Visible ranges, transforms (x↔px, y↔px), crosshair, snapping, selections. No data mutation.
-- Renderer: Backend-agnostic trait; Skia implementation with GPU first and CPU fallback. All overlays/crosshair rendered here for consistency.
-- UI (Dioxus): Chart canvas component drives ViewState via input events, shows tooltips and panels, schedules redraws.
-- Plugin: Stable traits for overlays (draw hooks) and indicators (compute hooks). Versioned params; reference plugins provided.
-- Shell (Tauri): Windowing, menus, dialogs, packaging; integrates the Dioxus chart app.
+## Executive Summary
 
-## Public API (Lightweight-Charts parity, idiomatic Rust)
-- Creation: `add_line_series(&[(f64,f64)])`, `add_area_series(..)`, `add_candlestick_series(&[Candle])`, `add_histogram_series(..).with_baseline(y0)`, `add_baseline_series(..).with_baseline(y0)`
-- Updates: `set_data(..)`, `update_last(..)`, `push_point(..)`, `clear()`
-- View: `set_visible_range(x_min, x_max)`, `autoscale_full()`, `autoscale_y_visible()`, `set_scale(Linear|Log)`
-- Events: `on_crosshair_move`, `on_click`, `on_range_change`
-- Theme: `set_theme(Light|Dark|Custom(Theme))`
-- Export: `to_png(path)`, `to_svg(path)`
-Note: Expose `ChartHandle/SeriesHandle` wrappers around `Arc<Mutex<...>>` for thread-safe UI integration.
+- Goal: Build a high‑performance, HiDPI‑aware, TradingView‑style charting engine with overlays, indicators, precise zoom/pan, and extensible UI, hosted by Dioxus Desktop.
+- Current strengths: Solid core rendering via Skia CPU surfaces, clean axis/tick/tooltip logic, overlays/indicators API, downsampling (LTTB), and a window demo with crosshair + pan/zoom.
+- Strategy: Keep Skia as the primary renderer (CPU now, GPU later), maintain a thin renderer boundary, and introduce a Dioxus shell that embeds a native chart surface.
 
-## Renderer & Pixel-Perfect Rules
-- Trait surface: `draw_chart(chart, view, surface)`, plus primitives `draw_text/line/rect/path` and `measure_text`.
-- Skia GPU: Use `skia_safe::gpu::DirectContext` (GL/Vulkan decided at runtime). CPU fallback: `surfaces::raster_n32_premul`.
-- 1px crisping: align strokes to N+0.5 device pixels; apply rounding post-transform for grid/axes.
-- HiDPI: logical_size × scale_factor = surface size; map inputs accordingly; maintain consistent text metrics.
-- Text: Use Skia textlayout with tabular numbers; cache shaped glyph runs by (font, size, string).
+## Architecture
 
-## Performance Plan
-- LOD/Downsampling: LTTB for line/area; bucket OHLC by visible pixel columns; stride skip as last resort.
-- Caching: Cache downsampled data by key (x_min, x_max, pixel_width) with hysteresis; reuse prebuilt `Path`s for candles/bars.
-- Batching: Group same-style draws; avoid per-frame allocations; precompute vertices for stable data ranges.
-- Text budget: Limit tick labels to a budget per axis; incremental layout; glyph atlas cache.
-- Targets: 1M points @ 60 FPS (GPU); 100–200k smooth on CPU fallback.
+- Core Engine (existing)
+  - Modules: series, axes/scales, grid, theme, text shaping, overlays/indicators, view state.
+  - Rendering path: Skia CPU raster today; prepared for GPU Skia or future wgpu.
+  - Key files:
+    - `crates/chart-core/src/chart.rs`
+    - `crates/chart-core/src/plugin.rs`
+    - `crates/chart-core/src/view.rs`
+    - `crates/chart-core/src/scale.rs`
 
-## Interactivity & UX Guidelines
-- Inputs: Left-drag pan; wheel zoom at cursor (exponential scaling base 1.2–1.4); modifiers for Y-only zoom.
-- Autoscale: A = full extents, Y = autoscale Y to visible X-range; clamp to data extents if enabled.
-- Crosshair: Snap to nearest x; for OHLC, snap to candle centers. Render via Skia with theme colors.
-- Tooltips: Consolidated multi-series tooltip; monospace aligned columns; per-series formatter; positioned to avoid occlusion.
-- Accessibility: High-contrast theme and larger font option; keyboard nav for nearest datapoints.
+- Renderer Backends
+  - Primary: Skia CPU (now), Skia GPU (GL/Metal/Vulkan) later, optional wgpu backend.
+  - Crate: `crates/chart-render-skia/src/lib.rs` (CPU surface + GPU scaffolding behind feature).
 
-## Dioxus + Tauri Integration Plan
-- Phase 1 (now): Dioxus Desktop + softbuffer CPU blit. Render via Skia CPU to RGBA8 and blit; deterministic tests and simple plumbing.
-- Phase 2: Skia GPU path under wry/winit (GL/Vulkan). Handle resize/swapchain; preserve determinism for CPU tests.
-- Phase 3: Tauri desktop shell (menus, dialogs, packaging). Embed Dioxus; expose commands for Open/Export.
+- Host Shells
+  - Winit/Softbuffer demo: Functional reference with pan/zoom/crosshair/overlays.
+    - `crates/window-demo/src/main.rs`
+  - Dioxus Component Shell (to implement): UI, events, layout; embeds a native chart surface.
+    - `crates/chart-dioxus/src/lib.rs` (currently a stub)
 
-## Plugin System
-- Traits:
-  - `Overlay { fn id(&self) -> &'static str; fn draw(&self, ctx, chart, view); fn handle_event(..) { } }`
-  - `Indicator { fn id(&self) -> &'static str; fn compute(&self, input: &Series, params) -> Series }`
-- Reference plugins: SMA overlay, VWAP overlay, H/V lines, measuring tool.
+ASCII overview:
+
+```
+App (Dioxus Desktop)
+  UI state, panels, menus
+  ChartCanvas (native surface)
+    Renderer (Skia CPU/GPU)
+      ChartCore (model, view, overlays)
+        DataStore (series/indicators cache)
+        ViewState (pan/zoom/autoscale)
+        Plugin system (overlays/indicators)
+```
+
+## Design Principles (TradingView‑level)
+
+- Separation of concerns: core data + transforms in `chart-core`; rendering via a thin canvas boundary; UI in Dioxus/Tauri.
+- Pixel accuracy: half‑pixel alignment for hairlines; integer‑aligned grids/ticks; subpixel AA for text only.
+- HiDPI correctness: DPR‑aware layout, paddings, tick lengths, and hit testing.
+- Performance first: downsample by viewport; batch by paint state; avoid unnecessary re‑layout; prefer cheap translations where viable.
+- Extensibility: plugins for overlays/indicators with world‑space events; multiple axes and scale groups.
+
+## MVP Feature Scope
+
+- Series: Candles, Bars, Line, Histogram, Baseline (present).
+- Interactions: Pan, zoom at cursor, crosshair with tooltip (present), Y autoscale, log scale toggle (present).
+- Overlays: SMA, guide lines (present); next: EMA, VWAP.
+- Export: PNG/SVG (present). Later: copy to clipboard, PDF.
+- UI: Dioxus toolbar (period, symbol, theme, overlays), status bar (OHLC under cursor), theme switch.
+
+## Renderer Boundary Plan
+
+- Near‑term: Keep Skia as the single drawing API. Hosts provide CPU raster or GPU surface; call `Chart::draw_onto_canvas`.
+- Later: Introduce a `Renderer` trait when adding a second backend (e.g., wgpu) to avoid premature abstraction.
+
+## Dioxus Integration
+
+- Target: Dioxus UI with a native chart surface in the same window; no browser canvas.
+- Approach: Dioxus Desktop (wry/tao). Obtain raw window handle; create `softbuffer::Surface` for the chart region; drive redraws from the host event loop. Communicate UI controls to the chart via shared state or channels.
+
+## Event Model
+
+- Centralize pan/zoom/crosshair in `ViewState` (already implemented and used in window demo).
+- Map device px → world via `TimeScale`/`ValueScale` within plot insets.
+- Pointer capture + drag state for panning; wheel zoom around cursor; keyboard accelerators (A=reset, Y=autoscale, L=log scale).
+- Overlay events dispatched in world coordinates using `OverlayEvent` (in `plugin.rs`).
+
+## HiDPI and Crispness
+
+- Maintain `opts.dpr` and scale text, paddings, tick lengths; align 1px strokes to half‑pixels when `crisp_lines`.
+- Ensure consistency across grid, axes, ticks, series outlines, SVG output.
+
+## Performance Strategy
+
+- CPU raster path
+  - Downsample (LTTB) when points >> pixels; choose target samples based on viewport width.
+  - Batch geometry by paint state (already used for candles/bars).
+  - Avoid reconstructing paths on pure pan; prefer cheap recompute of transforms; consider translate‑only re‑paint later.
+  - HUD/crosshair as separate pass (future) for minimal redraw.
+- GPU path (later)
+  - Skia GPU: swap to GPU surface; reuse `draw_onto_canvas` unchanged.
+  - Optional wgpu: instanced rectangles (candles), line strips, dynamic uniforms; SDF text atlas.
+- Text
+  - Cache font metrics and tick layouts; re‑shape only when tick set changes.
+
+## Data Model and Scales
+
+- Support index‑based and time‑based X; keep time tick heuristics (`detect_time_like`, `format_time_tick`).
+- Multiple Y‑axes with scale groups
+  - Introduce `ScaleGroup` IDs; aggregate min/max per group; render left/right axes.
+  - API addition: `Series::with_scale_group(id)` or a setter.
+
+## UI/UX Guidelines
+
+- Mouse/keys
+  - Left‑drag pan; wheel zoom around cursor; Shift/Ctrl to constrain zoom; double‑click or A for autoscale; Y for autoscale‑Y on visible range; L to toggle log.
+- Crosshair
+  - Add axis boxes showing X (time) and Y (price) near the hairlines; current tooltip is a good start.
+- Grid/labels
+  - Dynamic tick density; avoid overlaps by measuring label widths with the text shaper.
+- Overlays/Indicators
+  - Toggleable from a side panel; consistent color coding; quick parameter controls (periods).
+- Export
+  - PNG/SVG now; add copy‑to‑clipboard and “Export selection” later.
+
+## Concrete Next Steps
+
+1) Implement `ChartCanvas` in `crates/chart-dioxus`
+   - Props: `series`, `overlays`, `initial_view`, `theme`, `on_view_change`.
+   - Internals: create native `softbuffer::Surface`, render loop using `Chart::render_to_rgba8`, wire mouse/keyboard to `ViewState` and `OverlayEvent`.
+   - File: `crates/chart-dioxus/src/lib.rs`.
+
+2) Extract a reusable softbuffer helper
+   - Utility to own `softbuffer::Context`/`Surface`, handle `resize`, `present_rgba`.
+   - Use from `window-demo` and `chart-dioxus`.
+   - Files: new small module under `crates/window-demo` or a shared crate.
+
+3) Crosshair axis value boxes and legend row
+   - Extend after crosshair render to draw small value boxes at axes and a minimal legend.
+   - File: `crates/chart-core/src/chart.rs` (around crosshair/tooltip drawing).
+
+4) Prepare Skia GPU behind a feature
+   - Wire GL/Metal/Vulkan via `skia-safe` features; keep optional.
+   - File: `crates/chart-render-skia/src/lib.rs` (GPU scaffolding already stubbed).
+
+5) Multiple Y scales (design + staged impl)
+   - Add `ScaleGroup`; per‑group autoscale; render left/right axes; per‑series assignment.
+
+## Code Sketches (Illustrative)
+
+### Dioxus `ChartCanvas` skeleton (CPU path; simplified)
 
 ```rust
-pub trait Overlay {
-    fn id(&self) -> &'static str;
-    fn draw(&self, ctx: &mut DrawCtx, chart: &Chart, view: &ViewState);
-    fn handle_event(&mut self, _evt: &PointerEvent, _chart: &Chart, _view: &ViewState) {}
+use dioxus::prelude::*;
+use chart_core::{Chart, RenderOptions, ViewState, Theme, Series};
+use std::sync::{Arc, Mutex};
+
+pub struct ChartProps {
+    pub series: Vec<Series>,
+    pub theme: Theme,
+    pub on_view_change: Option<EventHandler<ViewState>>, // optional callback
 }
 
-pub trait Indicator {
-    fn id(&self) -> &'static str;
-    fn compute(&self, input: &Series, params: &IndicatorParams) -> Series;
+pub fn ChartCanvas(cx: Scope<ChartProps>) -> Element {
+    let chart = use_ref(cx, || {
+        let mut c = Chart::new();
+        for s in &cx.props.series { c.add_series(s.clone()); }
+        c
+    });
+    let view = use_ref(cx, || ViewState::from_chart(&chart.read()));
+    let dpr = use_state(cx, || 1.0f32);
+
+    // TODO: obtain raw window handle from host, construct softbuffer::Surface
+    // TODO: wire mouse/keyboard → update ViewState → request redraw
+    // TODO: on redraw, build RenderOptions, apply view, render_to_rgba8, blit to surface
+
+    cx.render(rsx! {
+        div { /* Native chart region host; attach event handlers */ }
+    })
 }
 ```
 
-## Testing & Quality
-- Golden snapshots: CPU raster, labels off, fixed size; per-series goldens; expand with zoomed-in/out variants.
-- Property tests: Scale monotonicity and x↔px round-trip; autoscale invariants.
-- Performance tests: Microbench downsampling and frame budgets for target datasets.
-- CI: Multi-OS matrix; CPU goldens checked in; allow GPU path to skip in CI if needed.
+### Softbuffer helper (reuse from window demo)
 
-## Design Tradeoffs & Calls
-- CPU blit first → GPU later: Simpler, deterministic testing now; add GPU when UI boundaries are stable.
-- Dioxus Desktop before Tauri: Faster iteration; wrap with Tauri once features settle.
-- Per-series drawers with centralized batching/state: Keeps code readable while enabling shared perf wins.
+- Encapsulate `Context`/`Surface` creation, `resize(w,h)`, `present_rgba(&[u8])`.
+- Use in `crates/window-demo/src/main.rs` and `chart-dioxus` component.
 
-## Immediate Issues to Address
-- Tests: Fix typo in `crates/chart-core/tests/snapshot_series.rs` (histogram y-label has an extra quote; use "Y").
-- Crosshair: Move overlay lines from post-blit buffer writes into Skia renderer for consistent AA, theming, and HiDPI.
-- CSV time parsing: Add RFC3339 datetime fallback in `window-demo` for common CSVs beyond numeric epochs.
+## Challenges & Decisions
 
-## Next Steps (Execution Plan)
-1. Fix snapshot test label; run `cargo test -p chart-core` and bless if intended changes.
-2. Introduce `scale.rs` with forward/inverse transforms and crisping helpers; adopt in chart rendering and demo.
-3. Add `ViewState` to core; render crosshair via Skia using ViewState; remove manual buffer-line overlay.
-4. Implement LTTB and OHLC bucketing for visible range; add simple cache keyed by view width and range.
-5. Define `Theme` and thread it through renderers; keep tests with labels off for determinism.
-6. Add `to_svg(path)` export using Skia vector path; wire to demo/app menu.
-7. Scaffold `chart-dioxus` with softbuffer blit; wire mouse/keyboard to ViewState and existing APIs.
+- Dioxus Desktop as the host: use wry/tao windowing; avoid additional app shells.
+- Event loop ownership: Dioxus host drives redraws; avoid a second loop.
+- Renderer abstraction: defer trait extraction until a second backend exists to avoid premature complexity.
 
+## Quality Bar Checklist
+
+- Performance: Smooth pan/zoom at 60 FPS for 10–50k visible points; downsample beyond.
+- HiDPI: Crisp hairlines/text; correct scaling.
+- UX: Crosshair axis boxes; consistent theme; accessible shortcuts.
+- Extensibility: Plugins independent/composable; world‑space event routing.
+
+## Repo‑Specific Notes
+
+- Good patterns:
+  - RGBA blit path: `crates/window-demo/src/main.rs`.
+  - Overlay/indicator system: `crates/chart-core/src/plugin.rs`.
+  - HiDPI + crispness via `RenderOptions::dpr` and half‑pixel alignment in SVG.
+- Improvement opportunities:
+  - Cache tick label layouts to avoid re‑shaping every frame.
+  - Add axis value boxes to complement the tooltip HUD.
+
+## Next Actions (Choose 1–3 to implement next)
+
+1) Scaffold `ChartCanvas` in `crates/chart-dioxus` with CPU softbuffer path and full input wiring.
+2) Add crosshair axis value boxes and a small legend row in `chart-core`.
+3) Extract a reusable softbuffer helper and refactor `window-demo` to use it.

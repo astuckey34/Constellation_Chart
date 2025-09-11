@@ -1,3 +1,15 @@
 # BMAD (local only)
 .bmad-core/
 .bmad-*/
+
+# Rust / Cargo
+target/
+**/target/
+**/*.rs.bk
+
+# Common OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
