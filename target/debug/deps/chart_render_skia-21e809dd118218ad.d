@@ -1,5 +1,0 @@
-C:\GitHub\Constellation_Chart\target\debug\deps\chart_render_skia-21e809dd118218ad.d: crates\chart-render-skia\src\lib.rs
-
-C:\GitHub\Constellation_Chart\target\debug\deps\libchart_render_skia-21e809dd118218ad.rmeta: crates\chart-render-skia\src\lib.rs
-
-crates\chart-render-skia\src\lib.rs:
