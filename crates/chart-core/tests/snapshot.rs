@@ -23,7 +23,7 @@ fn render_bytes() -> Vec<u8> {
     // Render via public API to a temp file then read back
     let tmp = std::path::PathBuf::from("target/test_out/snapshot_tmp.png");
     std::fs::create_dir_all(tmp.parent().unwrap()).ok();
-    Chart { series: chart.series, x_axis: chart.x_axis, y_axis: chart.y_axis }
+    chart
         .render_to_png(&opts, &tmp)
         .expect("render to tmp");
     std::fs::read(tmp).expect("read tmp png")
