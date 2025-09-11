@@ -1,7 +1,7 @@
 // File: crates/window-demo/src/main.rs
 // Windowed demo: shows chart-core in a window with crosshair, pan, and zoom.
 
-use chart_core::{Axis, Chart, RenderOptions, Series, ViewState, Theme, SmaOverlay, HvLineOverlay, OverlayEvent};
+use chart_core::{Axis, Chart, RenderOptions, Series, ViewState, Theme, SmaOverlay, HvLineOverlay, OverlayEvent, Overlay};
 use chart_core::scale::{TimeScale, ValueScale};
 use chart_core::series::{Candle, SeriesType};
 use std::num::NonZeroU32;
@@ -52,6 +52,12 @@ fn main() {
     let mut charts = build_charts(&candles, downsample, 1024);
     let mut show_overlay = true; // toggle with 'O'
     let hv_overlay = std::sync::Arc::new(HvLineOverlay::new());
+    if show_overlay {
+        for ch in charts.iter_mut() {
+            ch.add_overlay(SmaOverlay { period: 14 });
+            ch.add_overlay(hv_overlay.clone());
+        }
+    }
 
     // Window + softbuffer
     let event_loop = EventLoop::new();
@@ -109,11 +115,6 @@ fn main() {
         {
             let ch = &mut charts[idx];
             v.apply_to_chart(ch);
-            ch.clear_overlays();
-            if show_overlay {
-                ch.add_overlay(SmaOverlay { period: 14 });
-                ch.add_overlay(hv_overlay.clone());
-            }
         }
 
         // Render and blit
@@ -181,6 +182,7 @@ fn main() {
                         }
                     }
                 }
+                
                 WindowEvent::MouseWheel { delta, .. } => {
                     if let Some((cx, cy)) = *cursor_pos.lock().unwrap() {
                         // Map cursor to world and zoom around it
@@ -218,6 +220,14 @@ fn main() {
                         }
                         Some(VirtualKeyCode::O) => {
                             show_overlay = !show_overlay;
+                            if show_overlay {
+                                for ch in charts.iter_mut() {
+                                    ch.add_overlay(SmaOverlay { period: 14 });
+                                    ch.add_overlay(hv_overlay.clone());
+                                }
+                            } else {
+                                for ch in charts.iter_mut() { ch.clear_overlays(); }
+                            }
                             None
                         }
                         Some(VirtualKeyCode::L) => {
@@ -241,6 +251,12 @@ fn main() {
                             // Toggle downsampling and rebuild to match current width
                             downsample = !downsample;
                             charts = build_charts(&candles, downsample, size.width as usize);
+                            if show_overlay {
+                                for ch in charts.iter_mut() {
+                                    ch.add_overlay(SmaOverlay { period: 14 });
+                                    ch.add_overlay(hv_overlay.clone());
+                                }
+                            }
                             *view.lock().unwrap() = ViewState::from_chart(&charts[idx]);
                             let ti = *theme_idx.lock().unwrap();
                             window.set_title(&format!(
